@@ -22,11 +22,16 @@ export const chatApi = {
     });
   },
 
-  // Send a message
-  sendMessage: async (sessionId, content, type = 'text') => {
+  // Send a message - UPDATED TO ACCEPT REPLY ID
+  sendMessage: async (sessionId, content, type = 'text', replyToId = null) => {
     return await api.post(
       '/api/chat/messages',
-      { session_id: sessionId, content, type },
+      { 
+        session_id: sessionId, 
+        content, 
+        type,
+        reply_to_message_id: replyToId  // ← ADD THIS
+      },
       { requiresAuth: true }
     );
   },

@@ -1,6 +1,37 @@
+// Smart detection: use localhost on laptop, IP on phone
+const getBaseUrl = () => {
+  // Server-side rendering (SSR) - use localhost
+  if (typeof window === 'undefined') {
+    return import.meta.env.PUBLIC_API_URL || 'http://localhost:8000';
+  }
+  
+  // If accessing via localhost, use localhost backend
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    return 'http://localhost:8000';
+  }
+  
+  // Otherwise use the IP address (for phone/network access)
+  return import.meta.env.PUBLIC_API_URL || 'http://10.42.236.108:8000';
+};
+
+const getWsUrl = () => {
+  // Server-side rendering (SSR)
+  if (typeof window === 'undefined') {
+    return import.meta.env.PUBLIC_WS_URL || 'ws://localhost:8000/ws';
+  }
+  
+  // If accessing via localhost, use localhost websocket
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    return 'ws://localhost:8000/ws';
+  }
+  
+  // Otherwise use the IP address
+  return import.meta.env.PUBLIC_WS_URL || 'ws://10.42.236.108:8000/ws';
+};
+
 // API Configuration
 export const API_CONFIG = {
-  BASE_URL: import.meta.env.PUBLIC_API_URL || 'http://localhost:8000',
+  BASE_URL: getBaseUrl(),
   ENDPOINTS: {
     // Auth endpoints
     LOGIN: '/api/auth/login',
@@ -69,5 +100,5 @@ export const API_CONFIG = {
 
 // WebSocket configuration
 export const WS_CONFIG = {
-  URL: import.meta.env.PUBLIC_WS_URL || 'ws://localhost:8000/ws',
+  URL: getWsUrl(),
 };
