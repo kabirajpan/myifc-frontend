@@ -2,7 +2,7 @@ import { api } from './client';
 import { API_CONFIG } from './config';
 
 export const roomsApi = {
-    // Get public rooms (no auth required)
+  // Get public rooms (no auth required)
   getPublicRooms: async () => {
     return await api.get(API_CONFIG.ENDPOINTS.GET_PUBLIC_ROOMS, { requiresAuth: false });
   },
@@ -36,14 +36,20 @@ export const roomsApi = {
     return await api.post(`${API_CONFIG.ENDPOINTS.LEAVE_ROOM}/${roomId}/leave`, null, { requiresAuth: true });
   },
 
- // Send message in room
-sendMessage: async (roomId, content, type = 'text', recipientId = null) => {
-  return await api.post(
-    `${API_CONFIG.ENDPOINTS.SEND_ROOM_MESSAGE}/${roomId}/messages`,
-    { content, type, recipient_id: recipientId },
-    { requiresAuth: true }
-  );
-},
+  // UPDATED: Send message in room with reply and caption support
+  sendMessage: async (roomId, content, type = 'text', replyTo = null, secretTo = null, caption = null) => {
+    return await api.post(
+      `${API_CONFIG.ENDPOINTS.SEND_ROOM_MESSAGE}/${roomId}/messages`,
+      { 
+        content, 
+        type, 
+        reply_to: replyTo,      // NEW: message_id to reply to
+        secret_to: secretTo,    // NEW: user_id for secret messages
+        caption                // NEW: caption for media messages
+      },
+      { requiresAuth: true }
+    );
+  },
 
   // Get room messages
   getMessages: async (roomId, limit = 100) => {
@@ -62,4 +68,38 @@ sendMessage: async (roomId, content, type = 'text', recipientId = null) => {
   deleteRoom: async (roomId) => {
     return await api.delete(`${API_CONFIG.ENDPOINTS.DELETE_ROOM}/${roomId}`, { requiresAuth: true });
   },
+
+  // NEW: React to room message
+  reactToMessage: async (roomId, messageId, emoji) => {
+    return await api.post(
+      `${API_CONFIG.ENDPOINTS.SEND_ROOM_MESSAGE}/${roomId}/messages/${messageId}/react`,
+      { emoji },
+      { requiresAuth: true }
+    );
+  },
+
+  // NEW: Get reactions for room message
+  getMessageReactions: async (roomId, messageId) => {
+    return await api.get(
+      `${API_CONFIG.ENDPOINTS.SEND_ROOM_MESSAGE}/${roomId}/messages/${messageId}/reactions`,
+      { requiresAuth: true }
+    );
+  },
+
+  // NEW: Remove reaction from room message
+  removeReaction: async (roomId, reactionId) => {
+    return await api.delete(
+      `${API_CONFIG.ENDPOINTS.SEND_ROOM_MESSAGE}/${roomId}/reactions/${reactionId}`,
+      { requiresAuth: true }
+    );
+  },
+
+  // Cleanup expired rooms (admin)
+  cleanupExpiredRooms: async () => {
+    return await api.post(
+      API_CONFIG.ENDPOINTS.CLEANUP_ROOMS,
+      null,
+      { requiresAuth: true }
+    );
+  }
 };
