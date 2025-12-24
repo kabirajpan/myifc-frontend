@@ -1,17 +1,27 @@
-import { component$, Slot, useVisibleTask$ } from "@builder.io/qwik";
+import { component$, Slot, useVisibleTask$, useContextProvider } from "@builder.io/qwik";
 import { useNavigate, Link } from "@builder.io/qwik-city";
 import { useAuth } from "../../context/auth";
+import { useChatStore, ChatContext } from "../../store/chat.store";
+import { useUserStore, UserContext } from "../../store/user.store";
 import Header from "../../components/layout/private-navbar";
 
 export default component$(() => {
   const auth = useAuth();
   const nav = useNavigate();
 
+  // Initialize stores (only state, no functions)
+  const chatStore = useChatStore();
+  const userStore = useUserStore();
+
+  // Provide contexts to all child components
+  useContextProvider(ChatContext, chatStore);
+  useContextProvider(UserContext, userStore);
+
   // Protect private routes - only check authentication
   useVisibleTask$(({ track }) => {
     track(() => auth.loading.value);
     track(() => auth.isAuthenticated.value);
-
+    
     if (!auth.loading.value && !auth.isAuthenticated.value) {
       setTimeout(() => {
         nav("/auth/login");

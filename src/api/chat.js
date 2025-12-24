@@ -22,16 +22,25 @@ export const chatApi = {
     });
   },
 
-  // Send a message - UPDATED TO ACCEPT REPLY ID
-  sendMessage: async (sessionId, content, type = 'text', replyToId = null) => {
-    return await api.post(
-      '/api/chat/messages',
-      { 
-        session_id: sessionId, 
-        content, 
-        type,
-        reply_to_message_id: replyToId  // ← ADD THIS
-      },
+  // Send a message - with reply and caption support
+sendMessage: async (sessionId, content, type = 'text', replyToId = null, caption = null) => {
+  return await api.post(
+    '/api/chat/messages',
+    { 
+      session_id: sessionId, 
+      content, 
+      type,
+      reply_to_message_id: replyToId,
+      caption: caption // ✅ Add caption field
+    },
+    { requiresAuth: true }
+  );
+},
+
+  // Delete a message (media only)
+  deleteMessage: async (messageId) => {
+    return await api.delete(
+      `/api/chat/messages/${messageId}`,
       { requiresAuth: true }
     );
   },
