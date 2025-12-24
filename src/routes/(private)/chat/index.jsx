@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "@builder.io/qwik-city";
 import { useAuth } from "../../../context/auth";
 import { useChatContext } from "../../../store/chat.store";
 import { useUserContext } from "../../../store/user.store";
-import { chatApi } from "../../../api/chat";
+import { chatApi } from "../../../api/chat-enhanced";
 import { authApi } from "../../../api/auth";
 import { friendsApi } from "../../../api/friends";
 import { wsService } from "../../../api/websocket";
@@ -113,14 +113,10 @@ export const MessageBubble = component$(
       if (msg.type === "image" || msg.type === "gif") {
         return (
           <div class="mb-2">
-            {msg.caption && (
-              <p class="text-sm text-gray-700 mb-2">{msg.caption}</p>
-            )}
-
             {/* ✅ Button bar above image */}
             <div class="flex items-center gap-2 mb-2">
               <button
-                onClick$={() => onImageClick(msg.content)}
+                onClick$={() => onImageClick(msg.id, msg.content)}
                 class="px-2 py-1 bg-blue-500 text-white text-xs rounded hover:bg-blue-600 transition-colors flex items-center gap-1"
                 title="View full size"
               >
@@ -130,7 +126,7 @@ export const MessageBubble = component$(
 
               {!isOwn && (
                 <button
-                class="px-2 py-1 bg-gray-500 text-white text-xs rounded hover:bg-gray-600 transition-colors flex items-center gap-1"
+                  class="px-2 py-1 bg-gray-500 text-white text-xs rounded hover:bg-gray-600 transition-colors flex items-center gap-1"
                   title="Report"
                 >
                   <LuAlertCircle class="w-3 h-3" />
@@ -164,7 +160,7 @@ export const MessageBubble = component$(
                 src={msg.content}
                 alt={msg.type}
                 class="max-w-[150px] max-h-[100px] rounded-lg shadow-sm cursor-pointer hover:opacity-90 transition-opacity object-cover"
-                onClick$={() => onImageClick(msg.content)}
+                onClick$={() => onImageClick(msg.id, msg.content)}
               />
             </div>
           </div>
@@ -214,9 +210,9 @@ export const MessageBubble = component$(
           <div class="flex items-start justify-end gap-2 px-2 py-1.5 hover:bg-gray-50 rounded">
             <div class="flex-1 min-w-0 flex flex-col items-end gap-1">
               {hasReply && (
-                <div class="w-full max-w-[80%] bg-pink-50 border-l-2 border-pink-300 rounded-r p-1.5 mb-1">
+                <div class={`w-full max-w-[80%] sm:max-w-[65%] md:max-w-[50%] lg:max-w-[40%] xl:max-w-[30%] ${isOwn ? 'bg-pink-50 border-l-2 border-pink-300' : 'bg-gray-100 border-l-2 border-gray-300'} rounded-r p-1.5 mb-1`}>
                   <div class="flex items-start gap-1.5">
-                    <LuCornerUpLeft class="w-3 h-3 text-pink-500 mt-0.5 flex-shrink-0" />
+                    <LuCornerUpLeft class={`w-3 h-3 ${isOwn ? 'text-pink-500' : 'text-gray-500'} mt-0.5 flex-shrink-0`} />
                     <div class="flex-1 min-w-0">
                       <div class="flex items-center gap-1.5 mb-0.5">
                         <div class={`text-xs font-medium ${getGenderColor(msg.reply_to_message_gender)}`}>
@@ -224,51 +220,75 @@ export const MessageBubble = component$(
                         </div>
                         <div class="text-xs text-gray-500">{formatTime(msg.reply_to_message_time)}</div>
                       </div>
-                      <p class="text-xs text-gray-700 truncate">{msg.reply_to_message_content}</p>
+                      {/* ✅ Show media type icon for media replies */}
+                      {(msg.reply_to_message_type === 'image' || msg.reply_to_message_type === 'gif') && (
+                        <div class="flex items-center gap-1 mb-0.5">
+                          <LuImage class="w-3 h-3 text-gray-500" />
+                          <span class="text-xs text-gray-700">Image</span>
+                        </div>
+                      )}
+                      {msg.reply_to_message_type === 'audio' && (
+                        <div class="flex items-center gap-1 mb-0.5">
+                          <LuMic class="w-3 h-3 text-gray-500" />
+                          <span class="text-xs text-gray-700">Voice message</span>
+                        </div>
+                      )}
+                      {/* ✅ Show caption if available */}
+                      {msg.reply_to_message_caption && (
+                        <p class="text-xs text-gray-700">{msg.reply_to_message_caption}</p>
+                      )}
+                      {/* ✅ Show text content for text messages */}
+                      {msg.reply_to_message_type === 'text' && (
+                        <p class="text-xs text-gray-700 truncate">{msg.reply_to_message_content}</p>
+                      )}
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* ✅ Avatar and Username FIRST */}
-              <div class="flex items-center justify-end gap-2 w-full">
-                {showTime && <span class="text-xs text-gray-500 flex-shrink-0">{formatTime(msg.created_at)}</span>}
-                <button
-                  onClick$={() => onUsernameClick(msg)}
-                  class={`font-bold text-sm hover:underline flex-shrink-0 ${getGenderColor(msg.sender_gender)}`}
-                >
-                  {msg.sender_username}
-                </button>
-                <div class="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold border-2 bg-white border-pink-600 text-pink-600 cursor-default">
+              <div class="flex items-start gap-2 justify-end">
+                {/* Time on the left */}
+                {showTime && (
+                  <span class="text-xs text-gray-500 flex-shrink-0 self-end">
+                    {formatTime(msg.created_at)}
+                  </span>
+                )}
+
+                <div class="flex-1 min-w-0">
+                  {/* Message text only - no username */}
+                  {msg.type === "text" && (
+                    <span
+                      onClick$={() => onMessageClick(msg.id)}
+                      class="text-sm text-gray-900 cursor-pointer break-words whitespace-pre-wrap inline-block text-right w-full"
+                    >
+                      {msg.content}
+                    </span>
+                  )}
+
+                  {/* Media caption only - no username */}
+                  {isMediaMessage && msg.caption && (
+                    <span class="text-sm text-gray-900 break-words whitespace-pre-wrap inline-block text-right w-full">
+                      {msg.caption}
+                    </span>
+                  )}
+                </div>
+
+                {/* Avatar on right */}
+                <div class="flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-[12px] font-semibold border-2 bg-white border-pink-600 text-pink-600 cursor-default mt-0.5">
                   {msg.sender_username?.charAt(0).toUpperCase()}
                 </div>
               </div>
 
-              {/* ✅ Text message (if type is text) */}
-              {msg.type === "text" && (
-                <span
-                  onClick$={() => onMessageClick(msg.id)}
-                  class="text-sm text-gray-900 cursor-pointer text-right w-full"
-                >
-                  {msg.content}
-                </span>
-              )}
-
-              {/* ✅ Media AFTER username */}
+              {/* ✅ Media AFTER username (without caption since it's shown above) */}
               {isMediaMessage && renderMediaContent()}
             </div>
           </div>
         ) : (
           <div class="flex items-start gap-2 px-2 py-1.5 hover:bg-gray-50 rounded">
-            <div
-              class="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold border-2 bg-white"
-              style={`color: ${getGenderBorderColor(msg.sender_gender)}; border-color: ${getGenderBorderColor(msg.sender_gender)};`}
-            >
-              {msg.sender_username?.charAt(0).toUpperCase()}
-            </div>
+
             <div class="flex-1 min-w-0 flex flex-col gap-1">
               {hasReply && (
-                <div class="w-full max-w-[80%] bg-gray-100 border-l-2 border-gray-300 rounded-r p-1.5">
+                <div class="w-full max-w-[80%] sm:max-w-[65%] md:max-w-[50%] lg:max-w-[40%] xl:max-w-[30%] bg-gray-100 border-l-2 border-gray-300 rounded-r p-1.5">
                   <div class="flex items-start gap-1.5">
                     <LuCornerUpLeft class="w-3 h-3 text-gray-500 mt-0.5 flex-shrink-0" />
                     <div class="flex-1 min-w-0">
@@ -278,31 +298,80 @@ export const MessageBubble = component$(
                         </div>
                         <div class="text-xs text-gray-500">{formatTime(msg.reply_to_message_time)}</div>
                       </div>
-                      <p class="text-xs text-gray-700 truncate">{msg.reply_to_message_content}</p>
+                      {/* ✅ Add media type icons for media replies */}
+                      {(msg.reply_to_message_type === 'image' || msg.reply_to_message_type === 'gif') && (
+                        <div class="flex items-center gap-1 mb-0.5">
+                          <LuImage class="w-3 h-3 text-gray-500" />
+                          <span class="text-xs text-gray-700">Image</span>
+                        </div>
+                      )}
+                      {msg.reply_to_message_type === 'audio' && (
+                        <div class="flex items-center gap-1 mb-0.5">
+                          <LuMic class="w-3 h-3 text-gray-500" />
+                          <span class="text-xs text-gray-700">Voice message</span>
+                        </div>
+                      )}
+                      {/* ✅ Show caption if available */}
+                      {msg.reply_to_message_caption && (
+                        <p class="text-xs text-gray-700">{msg.reply_to_message_caption}</p>
+                      )}
+                      {/* ✅ Show text content for text messages */}
+                      {msg.reply_to_message_type === 'text' && (
+                        <p class="text-xs text-gray-700 truncate">{msg.reply_to_message_content}</p>
+                      )}
                     </div>
                   </div>
                 </div>
               )}
-              {isMediaMessage && renderMediaContent()}
-              <div class="flex items-center gap-2 flex-1 min-w-0">
-                <div class="flex items-center gap-2 flex-1 min-w-0">
-                  <button
-                    onClick$={() => onUsernameClick(msg)}
-                    class={`font-bold text-sm hover:underline flex-shrink-0 ${getGenderColor(msg.sender_gender)}`}
-                  >
-                    {msg.sender_username}
-                  </button>
-                  {msg.type === "text" && (
-                    <span
-                      onClick$={() => onMessageClick(msg.id)}
-                      class="text-sm text-gray-900 cursor-pointer flex-1 min-w-0"
-                    >
-                      {msg.content}
-                    </span>
-                  )}
+
+              <div class="flex items-start gap-2">
+                {/* Avatar */}
+                <div
+                  class="flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-[12px] font-semibold border-2 bg-white mt-0.5"
+                  style={`color: ${getGenderBorderColor(msg.sender_gender)}; border-color: ${getGenderBorderColor(msg.sender_gender)};`}
+                >
+                  {msg.sender_username?.charAt(0).toUpperCase()}
                 </div>
-                {showTime && <span class="text-xs text-gray-500 flex-shrink-0">{formatTime(msg.created_at)}</span>}
+
+                <div class="flex-1 min-w-0">
+                  {/* Flexible container */}
+                  <div class="flex flex-wrap items-baseline gap-x-1.5">
+                    {/* Message text */}
+                    {msg.type === "text" && (
+                      <span
+                        onClick$={() => onMessageClick(msg.id)}
+                        class="text-sm text-gray-900 cursor-pointer break-words whitespace-pre-wrap flex-1 min-w-0"
+                      >
+                        {/* Username with colon */}
+                        <button
+                          onClick$={() => onUsernameClick(msg)}
+                          class={`font-bold text-sm hover:underline flex-shrink-0 ${getGenderColor(msg.sender_gender)}`}
+                        >
+                          {msg.sender_username}: {" "}
+                        </button>
+                        {msg.content}
+                      </span>
+                    )}
+
+                    {/* Media caption */}
+                    {isMediaMessage && msg.caption && (
+                      <span class="text-sm text-gray-900 break-words whitespace-pre-wrap flex-1 min-w-0">
+                        {msg.caption}
+                      </span>
+                    )}
+
+                    {/* Time on the right */}
+                    {showTime && (
+                      <span class="text-xs text-gray-500 flex-shrink-0 ml-auto">
+                        {formatTime(msg.created_at)}
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
+
+              {/* ✅ Media FIRST for receiver (before username line) */}
+              {isMediaMessage && renderMediaContent()}
             </div>
           </div>
         )}
@@ -315,6 +384,24 @@ export const MessageBubble = component$(
     );
   },
 );
+
+const buildImageViewerData = (messages) => {
+  return messages
+    .filter(m => m.type === 'image' || m.type === 'gif')
+    .map(m => ({
+      id: m.id,
+      url: m.content,
+      sender_username: m.sender_username,
+      sender_gender: m.sender_gender,
+      caption: m.caption,
+      created_at: m.created_at,
+      reactions: m.reactions || [],
+    }));
+};
+
+const findImageIndex = (images, messageId) => {
+  return images.findIndex(img => img.id === messageId);
+};
 
 export default component$(() => {
   const location = useLocation();
@@ -516,6 +603,22 @@ export default component$(() => {
             if (!exists) {
               chat.state.messages = [...chat.state.messages, newMsg];
 
+              // ✅ If image viewer is open and new image arrives, append to viewer array
+              if (chat.state.imageViewer.isBuilt && (newMsg.type === 'image' || newMsg.type === 'gif')) {
+                chat.state.imageViewer.images = [
+                  ...chat.state.imageViewer.images,
+                  {
+                    id: newMsg.id,
+                    url: newMsg.content,
+                    sender_username: newMsg.sender_username,
+                    sender_gender: newMsg.sender_gender,
+                    caption: newMsg.caption,
+                    created_at: newMsg.created_at,
+                    reactions: newMsg.reactions || [],
+                  }
+                ];
+              }
+
               console.log('🔍 Messages count AFTER:', chat.state.messages.length);
 
               // Auto-scroll if at bottom
@@ -607,7 +710,7 @@ export default component$(() => {
       sender_id: auth.user.value.id,
       sender_username: auth.user.value.username,
       sender_gender: auth.user.value.gender,
-      content: selectedMedia.value.preview, // Use preview URL temporarily
+      content: selectedMedia.value.preview,
       type: mediaType,
       caption: caption,
       created_at: new Date().toISOString(),
@@ -615,6 +718,15 @@ export default component$(() => {
       is_read: false,
       sending: true,
       reply_to_message_id: chat.state.replyingTo?.id || null,
+      // ✅ Add reply preview data for media messages too
+      ...(chat.state.replyingTo && {
+        reply_to_message_content: chat.state.replyingTo.content,
+        reply_to_message_sender: chat.state.replyingTo.username,
+        reply_to_message_gender: chat.state.replyingTo.gender,
+        reply_to_message_time: chat.state.replyingTo.created_at,
+        reply_to_message_type: chat.state.replyingTo.type || "text",
+        reply_to_message_caption: chat.state.replyingTo.caption || null,
+      }),
     };
 
     // Add to UI immediately (instant feedback!)
@@ -655,25 +767,41 @@ export default component$(() => {
     }
   });
 
-  // Message handlers
   const handleSendMessage = $(async () => {
-    // If there's selected media, send it with optional text
+    console.log('🔍 Send clicked:', {
+      hasMedia: !!selectedMedia.value,
+      messageText: newMessage.value,
+      trimmed: newMessage.value?.trim(),
+      sessionId: chat.state.currentSessionId,
+    });
+
+    // Handle media message
     if (selectedMedia.value) {
       await handleMediaSend(newMessage.value);
-      newMessage.value = "";
       return;
     }
 
-    // Otherwise, send text message as normal
-    if (!newMessage.value.trim() || !chat.state.currentSessionId) return;
+    // Validate text message
+    const messageText = newMessage.value?.trim();
+    if (!messageText) {
+      console.log('❌ Empty message');
+      return;
+    }
 
+    if (!chat.state.currentSessionId) {
+      console.log('❌ No session ID');
+      chat.state.error = 'No chat session found';
+      return;
+    }
+
+    // Create temp message
     const tempId = `temp-${Date.now()}`;
     const tempMessage = {
       id: tempId,
       sender_id: auth.user.value.id,
       sender_username: auth.user.value.username,
       sender_gender: auth.user.value.gender,
-      content: newMessage.value,
+      content: messageText,
       created_at: new Date().toISOString(),
       isOwn: true,
       is_read: false,
@@ -685,33 +813,44 @@ export default component$(() => {
         reply_to_message_sender: chat.state.replyingTo.username,
         reply_to_message_gender: chat.state.replyingTo.gender,
         reply_to_message_time: chat.state.replyingTo.created_at,
+        reply_to_message_type: chat.state.replyingTo.type || "text",
+        reply_to_message_caption: chat.state.replyingTo.caption || null,
       }),
     };
 
+    // Add to UI immediately
     chat.state.messages = [...chat.state.messages, tempMessage];
-    const messageContent = newMessage.value;
-    newMessage.value = "";
+
+    // Clear input and reply state
     const replyId = chat.state.replyingTo?.id || null;
     chat.state.replyingTo = null;
+    newMessage.value = "";
+
+    // Scroll to bottom
+    setTimeout(() => scrollToBottom(), 50);
 
     try {
+      // Send to backend
       const messageData = await chatApi.sendMessage(
         chat.state.currentSessionId,
-        messageContent,
+        messageText,
         "text",
         replyId
       );
 
+      // Replace temp message with real one
       chat.state.messages = chat.state.messages.map(m =>
         m.id === tempId ? { ...messageData.data, isOwn: true } : m
       );
 
-      updateOwnChatList(messageContent, "text", null);
+      updateOwnChatList(messageText, "text", null);
 
-      scrollToBottom();
+      console.log('✅ Message sent successfully');
     } catch (err) {
+      console.error('❌ Send failed:', err);
+      // Remove temp message on error
       chat.state.messages = chat.state.messages.filter(m => m.id !== tempId);
-      chat.state.error = err.message;
+      chat.state.error = err.message || 'Failed to send message';
     }
   });
 
@@ -724,6 +863,13 @@ export default component$(() => {
 
   const handleChatSelect = $(async (chatItem) => {
     try {
+
+      // ✅ Reset image viewer when switching chats
+      chat.state.imageViewer.isOpen = false;
+      chat.state.imageViewer.images = [];
+      chat.state.imageViewer.currentIndex = 0;
+      chat.state.imageViewer.isBuilt = false;
+
       chat.state.loading = true;
       chat.state.currentSessionId = chatItem.session_id;
 
@@ -744,10 +890,20 @@ export default component$(() => {
 
   const handleUsernameClick = $((message) => {
     if (message.sender_id === auth.user.value?.id) return;
+
+    // For media messages, use caption if available, otherwise show media type
+    let contentForReply = message.content;
+
+    if (message.type === 'image' || message.type === 'gif') {
+      contentForReply = message.caption || 'Image';
+    } else if (message.type === 'audio') {
+      contentForReply = message.caption || 'Voice message';
+    }
+
     chat.state.replyingTo = {
       id: message.id,
       username: message.sender_username,
-      content: message.content,
+      content: contentForReply,
       gender: message.sender_gender,
       created_at: message.created_at,
     };
@@ -849,9 +1005,19 @@ export default component$(() => {
         onMessageClick={$((id) => (chat.selectedMessageId.value = chat.selectedMessageId.value === id ? null : id))}
         onUsernameClick={handleUsernameClick}
         onDeleteMessage={handleDeleteMessage}
-        onImageClick={$((url) => {
-          viewerImage.value = url;
-          showImageViewer.value = true;
+        onImageClick={$((messageId, url) => {
+          // Build image array if not already built
+          if (!chat.state.imageViewer.isBuilt) {
+            chat.state.imageViewer.images = buildImageViewerData(chat.state.messages);
+            chat.state.imageViewer.isBuilt = true;
+          }
+
+          // Find and set current image
+          const index = findImageIndex(chat.state.imageViewer.images, messageId);
+          if (index !== -1) {
+            chat.state.imageViewer.currentIndex = index;
+            chat.state.imageViewer.isOpen = true;
+          }
         })}
         deletingMessageId={chat.state.deletingMessageId}
       />
@@ -1097,11 +1263,21 @@ export default component$(() => {
             {/* Message Input */}
             <div class="flex-shrink-0 px-3 py-2.5 border-t border-gray-200 bg-white">
               <div class="flex items-end gap-2">
-                <div class="flex-1 relative flex items-center border border-gray-200 rounded-lg focus-within:ring-1 focus-within:ring-pink-500 focus-within:border-transparent">
-                  <input
-                    type="text"
-                    bind:value={newMessage}
-                    onKeyPress$={handleKeyPress}
+                <div class="flex-1 relative flex items-end border border-gray-200 rounded-lg focus-within:ring-1 focus-within:ring-pink-500 focus-within:border-transparent">
+                  <textarea
+                    value={newMessage.value}
+                    onInput$={(e) => {
+                      newMessage.value = e.target.value;
+
+                      // Auto-expand textarea
+                      if (e.target.value.includes('\n')) {
+                        e.target.style.height = 'auto';
+                        e.target.style.height = Math.min(e.target.scrollHeight, 100) + 'px';
+                      } else {
+                        e.target.style.height = '28px';
+                      }
+                    }}
+                    onKeyDown$={handleKeyPress}
                     placeholder={
                       selectedMedia.value
                         ? "Add a message (optional)..."
@@ -1109,7 +1285,8 @@ export default component$(() => {
                           ? `Reply to ${chat.state.replyingTo.username}...`
                           : "Type a message..."
                     }
-                    class="flex-1 px-3 py-2 text-xs focus:outline-none rounded-lg"
+                    class="flex-1 px-3 py-1.5 text-xs focus:outline-none rounded-lg resize-none h-[28px] min-h-[28px] max-h-[120px] overflow-y-auto leading-[1.2] placeholder:leading-[1.2]"
+                    rows="1"
                   />
                   <div class="relative">
                     <button
@@ -1164,10 +1341,7 @@ export default component$(() => {
                 </div>
                 <button
                   onClick$={handleSendMessage}
-                  disabled={
-                    (!selectedMedia.value && !newMessage.value.trim()) ||
-                    (selectedMedia.value?.uploading)
-                  }
+                  disabled={selectedMedia.value?.uploading || (!selectedMedia.value && !newMessage.value?.trim())}
                   class="px-3 py-2 bg-pink-600 text-white rounded-lg hover:bg-pink-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
                 >
                   <LuSend class="w-3.5 h-3.5" />
@@ -1254,12 +1428,95 @@ export default component$(() => {
         onBlockUser={handleBlockUser}
       />
 
+      {chat.state.imageViewer.isOpen && console.log('🔍 Image Viewer Debug:', {
+        isOpen: chat.state.imageViewer.isOpen,
+        currentIndex: chat.state.imageViewer.currentIndex,
+        totalImages: chat.state.imageViewer.images.length,
+        currentImageData: chat.state.imageViewer.images[chat.state.imageViewer.currentIndex],
+        allImages: chat.state.imageViewer.images
+      })}
+
       <ImageViewer
-        imageUrl={viewerImage.value}
-        isOpen={showImageViewer.value}
+        imageUrl={
+          chat.state.imageViewer.isOpen && chat.state.imageViewer.images[chat.state.imageViewer.currentIndex]
+            ? chat.state.imageViewer.images[chat.state.imageViewer.currentIndex].url
+            : null
+        }
+        isOpen={chat.state.imageViewer.isOpen}
         onClose={$(() => {
-          showImageViewer.value = false;
-          viewerImage.value = null;
+          chat.state.imageViewer.isOpen = false;
+        })}
+        messageData={
+          chat.state.imageViewer.isOpen && chat.state.imageViewer.images[chat.state.imageViewer.currentIndex]
+            ? chat.state.imageViewer.images[chat.state.imageViewer.currentIndex]
+            : null
+        }
+        // Navigation
+        onPrevious={$(() => {
+          if (chat.state.imageViewer.currentIndex > 0) {
+            chat.state.imageViewer.currentIndex--;
+          }
+        })}
+        onNext={$(() => {
+          if (chat.state.imageViewer.currentIndex < chat.state.imageViewer.images.length - 1) {
+            chat.state.imageViewer.currentIndex++;
+          }
+        })}
+        hasPrevious={chat.state.imageViewer.currentIndex > 0}
+        hasNext={chat.state.imageViewer.currentIndex < chat.state.imageViewer.images.length - 1}
+        // Actions
+        onReact={$(async (messageId, emoji) => {
+          try {
+            await chatApi.reactToMessage(messageId, emoji);
+            // Update in messages array
+            chat.state.messages = chat.state.messages.map(m => {
+              if (m.id === messageId) {
+                const reactions = m.reactions || [];
+                return { ...m, reactions: [...reactions, { id: Date.now(), emoji, user_id: auth.user.value.id }] };
+              }
+              return m;
+            });
+            // Update in image viewer array
+            const imgIndex = chat.state.imageViewer.currentIndex;
+            const currentImg = chat.state.imageViewer.images[imgIndex];
+            if (currentImg) {
+              const reactions = currentImg.reactions || [];
+              chat.state.imageViewer.images[imgIndex] = {
+                ...currentImg,
+                reactions: [...reactions, { id: Date.now(), emoji, user_id: auth.user.value.id }]
+              };
+            }
+            chat.state.successMessage = "Reaction added!";
+            setTimeout(() => (chat.state.successMessage = null), 2000);
+          } catch (err) {
+            chat.state.error = err.message || "Failed to add reaction";
+          }
+        })}
+        onReport={$(async (messageId, reason, details) => {
+          try {
+            await chatApi.reportMessage(messageId, reason, details);
+            chat.state.successMessage = "Report submitted successfully";
+            setTimeout(() => (chat.state.successMessage = null), 3000);
+          } catch (err) {
+            chat.state.error = err.message || "Failed to submit report";
+          }
+        })}
+        onShare={$(async (messageId) => {
+          try {
+            const result = await chatApi.generateShareLink(messageId);
+            if (result.share_url) {
+              await navigator.clipboard.writeText(result.share_url);
+              chat.state.successMessage = "Share link copied!";
+            } else {
+              // Fallback: copy image URL
+              const currentImg = chat.state.imageViewer.images[chat.state.imageViewer.currentIndex];
+              await navigator.clipboard.writeText(currentImg.url);
+              chat.state.successMessage = "Image URL copied!";
+            }
+            setTimeout(() => (chat.state.successMessage = null), 2000);
+          } catch (err) {
+            chat.state.error = "Failed to generate share link";
+          }
         })}
       />
     </div>

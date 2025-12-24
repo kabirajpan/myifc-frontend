@@ -35,6 +35,14 @@ export const useChatStore = () => {
     
     // Search
     searchQuery: "",
+    
+    // ✅ NEW: Image Viewer State (Production-ready)
+    imageViewer: {
+      isOpen: false,
+      images: [], // Lightweight array of image data
+      currentIndex: 0,
+      isBuilt: false, // Flag to know if we've already built the array
+    },
   });
 
   // Signals for UI-specific state
@@ -58,5 +66,3 @@ export const useChatContext = () => {
   }
   return context;
 };
-
-
