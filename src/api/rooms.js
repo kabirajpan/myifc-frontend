@@ -12,6 +12,11 @@ export const roomsApi = {
     return await api.get(API_CONFIG.ENDPOINTS.GET_ALL_ROOMS, { requiresAuth: true });
   },
 
+  // Get user's joined rooms
+  getUserRooms: async () => {
+    return await api.get('/api/rooms/user', { requiresAuth: true });
+  },
+
   // Create room
   createRoom: async (name, description, isAdminRoom = false) => {
     return await api.post(
@@ -36,16 +41,16 @@ export const roomsApi = {
     return await api.post(`${API_CONFIG.ENDPOINTS.LEAVE_ROOM}/${roomId}/leave`, null, { requiresAuth: true });
   },
 
-  // UPDATED: Send message in room with reply and caption support
+  // Send message in room with reply and caption support
   sendMessage: async (roomId, content, type = 'text', replyTo = null, secretTo = null, caption = null) => {
     return await api.post(
       `${API_CONFIG.ENDPOINTS.SEND_ROOM_MESSAGE}/${roomId}/messages`,
       {
         content,
         type,
-        reply_to: replyTo,      // NEW: message_id to reply to
-        secret_to: secretTo,    // NEW: user_id for secret messages
-        caption                // NEW: caption for media messages
+        reply_to: replyTo,
+        secret_to: secretTo,
+        caption
       },
       { requiresAuth: true }
     );
@@ -69,7 +74,7 @@ export const roomsApi = {
     return await api.delete(`${API_CONFIG.ENDPOINTS.DELETE_ROOM}/${roomId}`, { requiresAuth: true });
   },
 
-  // ADD THIS - Delete room message
+  // Delete room message
   deleteMessage: async (roomId, messageId) => {
     return await api.delete(
       `${API_CONFIG.ENDPOINTS.SEND_ROOM_MESSAGE}/${roomId}/messages/${messageId}`,
@@ -77,7 +82,7 @@ export const roomsApi = {
     );
   },
 
-  // ADD THIS - Report room message  
+  // Report room message
   reportMessage: async (roomId, messageId, reason, details) => {
     return await api.post(
       `/api/rooms/${roomId}/messages/${messageId}/report`,
@@ -86,7 +91,7 @@ export const roomsApi = {
     );
   },
 
-  // NEW: React to room message
+  // React to room message
   reactToMessage: async (roomId, messageId, emoji) => {
     return await api.post(
       `${API_CONFIG.ENDPOINTS.SEND_ROOM_MESSAGE}/${roomId}/messages/${messageId}/react`,
@@ -95,7 +100,7 @@ export const roomsApi = {
     );
   },
 
-  // NEW: Get reactions for room message
+  // Get reactions for room message
   getMessageReactions: async (roomId, messageId) => {
     return await api.get(
       `${API_CONFIG.ENDPOINTS.SEND_ROOM_MESSAGE}/${roomId}/messages/${messageId}/reactions`,
@@ -103,7 +108,7 @@ export const roomsApi = {
     );
   },
 
-  // NEW: Remove reaction from room message
+  // Remove reaction from room message
   removeReaction: async (roomId, reactionId) => {
     return await api.delete(
       `${API_CONFIG.ENDPOINTS.SEND_ROOM_MESSAGE}/${roomId}/reactions/${reactionId}`,
