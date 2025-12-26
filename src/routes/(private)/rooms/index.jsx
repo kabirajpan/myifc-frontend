@@ -1,34 +1,20 @@
-import { component$, useSignal, $, useVisibleTask$ } from "@builder.io/qwik";
+import { component$, useSignal, $ } from "@builder.io/qwik";
 import { useNavigate } from "@builder.io/qwik-city";
 import { useRoomContext } from "../../../store/room.store";
-import { useAuth } from "../../../context/auth";
 import { CreateRoomModal } from "../../../components/rooms/CreateRoomModal";
 import { JoinRoomModal } from "../../../components/rooms/JoinRoomModal";
 import { RoomList } from "../../../components/rooms/RoomList";
 import { roomsApi } from "../../../api/rooms";
-import { wsService } from "../../../api/websocket";
+import { LuHash } from "@qwikest/icons/lucide";
 
 export default component$(() => {
-  const auth = useAuth();
   const room = useRoomContext();
   const nav = useNavigate();
 
   // Modal states
   const showCreateModal = useSignal(false);
   const showJoinModal = useSignal(false);
-
-  // Available public rooms for joining
   const publicRooms = useSignal([]);
-
-  // Load user's joined rooms
-  const loadUserRooms = $(async () => {
-    try {
-      const response = await roomsApi.getUserRooms();
-      room.state.rooms = response.rooms || [];
-    } catch (err) {
-      room.state.error = err.message || "Failed to load rooms";
-    }
-  });
 
   // Load public rooms for joining
   const loadPublicRooms = $(async () => {
@@ -37,58 +23,6 @@ export default component$(() => {
       publicRooms.value = response.rooms || [];
     } catch (err) {
       room.state.error = err.message || "Failed to load public rooms";
-    }
-  });
-
-  // Initialize and load data
-  useVisibleTask$(async ({ cleanup }) => {
-    try {
-      room.state.loading = true;
-
-      // Connect WebSocket
-      wsService.connect();
-
-      // Subscribe to WebSocket events for room list updates
-      const unsubscribe = wsService.onMessage((data) => {
-        console.log('📨 WebSocket room list event:', data);
-
-        // Update room list when new message arrives
-        if (data.type === "new_message" && data.data?.room_id) {
-          const roomId = data.data.room_id;
-          const message = data.data.message;
-
-          room.state.rooms = room.state.rooms.map(r => {
-            if (r.id === roomId) {
-              let lastMessage = message.content;
-              if (message.type === 'image') lastMessage = 'Image';
-              else if (message.type === 'gif') lastMessage = 'GIF';
-              else if (message.type === 'audio') lastMessage = 'Voice message';
-              else if (message.caption) lastMessage = message.caption;
-
-              return {
-                ...r,
-                last_message: lastMessage,
-                last_message_time: message.created_at,
-                unread_count: message.sender_id === auth.user.value?.id ? r.unread_count : r.unread_count + 1
-              };
-            }
-            return r;
-          });
-        }
-      });
-
-      // Load user's joined rooms
-      await loadUserRooms();
-
-      room.state.loading = false;
-
-      // Cleanup on unmount
-      return () => {
-        unsubscribe();
-      };
-    } catch (err) {
-      room.state.error = err.message || "Failed to load rooms";
-      room.state.loading = false;
     }
   });
 
@@ -101,11 +35,12 @@ export default component$(() => {
       room.state.successMessage = "Room created successfully!";
       setTimeout(() => (room.state.successMessage = null), 3000);
 
-      // Reload rooms list
-      await loadUserRooms();
-
-      // Navigate to the newly created room
+      // Add to room list (RoomProvider's WS handler will also add it, but this is instant)
       if (response.room) {
+        const exists = room.state.rooms.some(r => r.id === response.room.id);
+        if (!exists) {
+          room.state.rooms = [...room.state.rooms, response.room];
+        }
         await nav(`/rooms/${response.room.id}`);
       }
     } catch (err) {
@@ -121,10 +56,10 @@ export default component$(() => {
       room.state.successMessage = "Joined room successfully!";
       setTimeout(() => (room.state.successMessage = null), 3000);
 
-      // Reload rooms list
-      await loadUserRooms();
+      // Reload room list to include new room
+      const response = await roomsApi.getUserRooms();
+      room.state.rooms = response.rooms || [];
 
-      // Navigate to the joined room
       await nav(`/rooms/${roomId}`);
     } catch (err) {
       room.state.error = err.message || "Failed to join room";
@@ -132,7 +67,6 @@ export default component$(() => {
   });
 
   const handleRoomSelect = $(async (selectedRoom) => {
-    // Navigate to the room
     await nav(`/rooms/${selectedRoom.id}`);
   });
 
@@ -140,49 +74,48 @@ export default component$(() => {
     room.state.searchQuery = query;
   });
 
-  const handleCreateClick = $(() => {
-    showCreateModal.value = true;
-  });
-
-  const handleJoinClick = $(async () => {
-    await loadPublicRooms();
-    showJoinModal.value = true;
-  });
-
-  const handleCreateModalClose = $(() => {
-    showCreateModal.value = false;
-  });
-
-  const handleJoinModalClose = $(() => {
-    showJoinModal.value = false;
-  });
-
   return (
-    <div class="fixed inset-0 top-16 flex items-center justify-center p-3 bg-gray-50">
-      {/* Full Width Room List */}
-      <div class="w-full max-w-2xl">
+    <div class="fixed inset-0 top-16 flex flex-col sm:flex-row sm:gap-3 sm:p-3 bg-gray-50 sm:bg-transparent">
+      {/* Room List Sidebar */}
+      <div class="flex sm:flex w-full sm:w-72 lg:w-80 bg-white sm:border sm:border-gray-200 sm:rounded-lg flex-col overflow-hidden h-full">
         <RoomList
           rooms={room.state.rooms}
           currentRoomId={null}
           searchQuery={room.state.searchQuery}
-          loading={room.state.loading}
+          loading={!room.state.roomsLoaded}
           onSearchChange={handleSearchChange}
           onRoomSelect={handleRoomSelect}
-          onCreateClick={handleCreateClick}
-          onJoinClick={handleJoinClick}
+          onCreateClick={$(() => showCreateModal.value = true)}
+          onJoinClick={$(async () => {
+            await loadPublicRooms();
+            showJoinModal.value = true;
+          })}
         />
+      </div>
+
+      {/* Main Chat Area - Empty State */}
+      <div class="flex-1 bg-white sm:border sm:border-gray-200 sm:rounded-lg flex flex-col overflow-hidden h-full">
+        <div class="flex-1 flex items-center justify-center p-4">
+          <div class="text-center">
+            <div class="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
+              <LuHash class="w-6 h-6 text-gray-400" />
+            </div>
+            <h3 class="text-sm font-medium text-gray-900 mb-1">No room selected</h3>
+            <p class="text-xs text-gray-500">Choose a room to start chatting</p>
+          </div>
+        </div>
       </div>
 
       {/* Modals */}
       <CreateRoomModal
         isOpen={showCreateModal.value}
-        onClose={handleCreateModalClose}
+        onClose={$(() => showCreateModal.value = false)}
         onSubmit={handleCreateRoom}
       />
 
       <JoinRoomModal
         isOpen={showJoinModal.value}
-        onClose={handleJoinModalClose}
+        onClose={$(() => showJoinModal.value = false)}
         onJoin={handleJoinRoom}
         publicRooms={publicRooms.value}
       />

@@ -1,13 +1,23 @@
-import { component$, useSignal, $, useVisibleTask$ } from "@builder.io/qwik";
+import { component$, useSignal, $, useVisibleTask$, useComputed$ } from "@builder.io/qwik";
 import { useLocation, useNavigate } from "@builder.io/qwik-city";
-import { useRoomContext } from "../../../../store/room.store";
+import {
+  useRoomContext,
+  getCachedRoom,
+  isCacheStale,
+  setCachedRoom,
+  updateRoomInList,
+  addMessage,
+  removeMessage,
+  updateMessage
+} from "../../../../store/room.store";
 import { useAuth } from "../../../../context/auth";
+import { RoomList } from "../../../../components/rooms/RoomList";
 import { RoomChat } from "../../../../components/rooms/RoomChat";
 import { RoomMembersList } from "../../../../components/rooms/RoomMembersList";
 import { ImageViewer } from "../../../../components/ui/ImageViewer";
+import { CreateRoomModal } from "../../../../components/rooms/CreateRoomModal";
+import { JoinRoomModal } from "../../../../components/rooms/JoinRoomModal";
 import { roomsApi } from "../../../../api/rooms";
-import { wsService } from "../../../../api/websocket";
-import { mediaApi } from "../../../../api/media";
 
 export default component$(() => {
   const auth = useAuth();
@@ -15,176 +25,190 @@ export default component$(() => {
   const location = useLocation();
   const nav = useNavigate();
 
-  // Get room ID from URL - Keep as string, don't parse to int
   const roomId = location.params.roomId;
 
-  // Debug log
-  console.log('🔍 Room ID from URL:', roomId);
+  // Modal states
+  const showCreateModal = useSignal(false);
+  const showJoinModal = useSignal(false);
+  const publicRooms = useSignal([]);
 
-  // Load room messages
-  const loadRoomMessages = $(async (id) => {
+  // Computed values from cache
+  // Computed values from cache - track roomId changes
+  const cachedRoom = useComputed$(() => {
+    const id = location.params.roomId;
+    return room.state.roomsCache[id];
+  });
+  const messages = useComputed$(() => {
+    const id = location.params.roomId;
+    return room.state.roomsCache[id]?.messages || [];
+  });
+  const members = useComputed$(() => {
+    const id = location.params.roomId;
+    return room.state.roomsCache[id]?.members || [];
+  });
+  const currentRoom = useComputed$(() => {
+    const id = location.params.roomId;
+    return room.state.roomsCache[id]?.room || null;
+  });
+
+  // Load room data (with smart caching)
+  const loadRoomData = $(async (id) => {
     try {
+      console.log('🔄 Loading room:', id);
       room.state.loading = true;
-      const response = await roomsApi.getMessages(id);
-      room.state.messages = (response.messages || []).map(msg => ({
+      room.state.activeRoomId = id;
+
+      // Check cache first
+      const cached = getCachedRoom(room.state, id);
+      const isStale = isCacheStale(room.state, id);
+
+      if (cached && !isStale) {
+        console.log('✅ Using cached data for room:', id);
+        room.state.loading = false;
+        return;
+      }
+
+      console.log('📡 Fetching fresh data for room:', id);
+
+      // Load in parallel
+      const [roomResponse, messagesResponse, membersResponse] = await Promise.all([
+        roomsApi.getRoom(id),
+        roomsApi.getMessages(id),
+        roomsApi.getMembers(id)
+      ]);
+
+      // Map messages with ownership
+      const mappedMessages = (messagesResponse.messages || []).map(msg => ({
         ...msg,
         isOwn: msg.sender_id === auth.user.value?.id,
       }));
-      room.state.loading = false;
-    } catch (err) {
-      room.state.error = err.message || "Failed to load messages";
-      room.state.loading = false;
-    }
-  });
 
-  // Load room members
-  const loadRoomMembers = $(async (id) => {
-    try {
-      const response = await roomsApi.getMembers(id);
-      room.state.members = response.members || [];
-    } catch (err) {
-      console.error("Failed to load members:", err);
-    }
-  });
+      // Update cache
+      setCachedRoom(room.state, id, {
+        room: roomResponse.room,
+        messages: mappedMessages,
+        members: membersResponse.members || [],
+        hasJoined: true,
+      });
 
-  // Load room details
-  const loadRoomDetails = $(async (id) => {
-    try {
-      const response = await roomsApi.getRoom(id);
-      room.state.currentRoom = response.room;
+      // Reset unread count for this room
+      updateRoomInList(room.state, id, { unread_count: 0 });
+
+      room.state.loading = false;
+      console.log('✅ Room data loaded and cached');
+
     } catch (err) {
-      room.state.error = err.message || "Room not found";
-      // Redirect back to rooms list if room doesn't exist
+      console.error('❌ Error loading room:', err);
+      room.state.error = err.message || "Failed to load room";
+      room.state.loading = false;
       setTimeout(() => nav("/rooms"), 2000);
     }
   });
 
-  // Initialize and load data
-  useVisibleTask$(async ({ cleanup, track }) => {
-    // Track location changes
-    track(() => location.params.roomId);
+  // Load public rooms
+  const loadPublicRooms = $(async () => {
+    try {
+      const response = await roomsApi.getPublicRooms();
+      publicRooms.value = response.rooms || [];
+    } catch (err) {
+      room.state.error = err.message || "Failed to load public rooms";
+    }
+  });
 
-    // Validate room ID
-    if (!roomId) {
+  // Initialize room
+  useVisibleTask$(async ({ track, cleanup }) => {
+    const currentRoomId = track(() => location.params.roomId);
+
+    if (!currentRoomId) {
       console.error('❌ No room ID provided');
       room.state.error = "No room ID provided";
       setTimeout(() => nav("/rooms"), 2000);
       return;
     }
 
+    console.log('🎯 Room changed to:', currentRoomId);
+
+    // Reset UI state
+    room.state.error = null;
+    room.state.replyingTo = null;
+    room.state.imageViewer.isOpen = false;
+    room.state.imageViewer.isBuilt = false;
+
+    // Load room data (uses cache if available)
+    await loadRoomData(currentRoomId);
+
+    // Cleanup
+    cleanup(() => {
+      console.log('🧹 Room cleanup:', currentRoomId);
+      room.state.activeRoomId = null;
+    });
+  });
+
+  // Handlers
+  const handleCreateRoom = $(async (data) => {
     try {
-      console.log('✅ Loading room:', roomId);
-      room.state.loading = true;
+      const response = await roomsApi.createRoom(data.name, data.description, data.isAdminRoom);
 
-      // Reset state
-      room.state.currentRoomId = roomId;
-      room.state.messages = [];
-      room.state.members = [];
-      room.state.imageViewer.isOpen = false;
-      room.state.imageViewer.images = [];
-      room.state.imageViewer.currentIndex = 0;
-      room.state.imageViewer.isBuilt = false;
+      showCreateModal.value = false;
+      room.state.successMessage = "Room created successfully!";
+      setTimeout(() => (room.state.successMessage = null), 3000);
 
-      // Connect WebSocket
-      wsService.connect();
-
-      // Subscribe to WebSocket events
-      const unsubscribe = wsService.onMessage((data) => {
-        console.log('📨 WebSocket room event:', data);
-
-        // New room message
-        if (data.type === "new_message" && data.data?.room_id === roomId) {
-          const message = data.data.message;
-          const newMsg = {
-            ...message,
-            isOwn: message.sender_id === auth.user.value?.id,
-          };
-
-          const exists = room.state.messages.some(m => m.id === newMsg.id);
-          if (!exists) {
-            room.state.messages = [...room.state.messages, newMsg];
-
-            // Update image viewer if open
-            if (room.state.imageViewer.isBuilt && (newMsg.type === 'image' || newMsg.type === 'gif')) {
-              room.state.imageViewer.images = [
-                ...room.state.imageViewer.images,
-                {
-                  id: newMsg.id,
-                  url: newMsg.content,
-                  sender_username: newMsg.sender_username,
-                  sender_gender: newMsg.sender_gender,
-                  caption: newMsg.caption,
-                  created_at: newMsg.created_at,
-                  reactions: newMsg.reactions || [],
-                }
-              ];
-            }
-          }
+      // Add to room list
+      if (response.room) {
+        const exists = room.state.rooms.some(r => r.id === response.room.id);
+        if (!exists) {
+          room.state.rooms = [...room.state.rooms, response.room];
         }
-
-        // User joined room
-        if (data.type === "user_joined_room" && data.room_id === roomId) {
-          loadRoomMembers(roomId);
-        }
-
-        // User left room
-        if (data.type === "user_left_room" && data.room_id === roomId) {
-          room.state.members = room.state.members.filter(m => m.id !== data.user_id);
-        }
-
-        // Message reactions
-        if (data.type === "message_reacted" && data.room_id === roomId) {
-          room.state.messages = room.state.messages.map(m => {
-            if (m.id === data.message_id) {
-              const reactions = m.reactions || [];
-              return { ...m, reactions: [...reactions, data.reaction] };
-            }
-            return m;
-          });
-        }
-
-        if (data.type === "reaction_removed" && data.room_id === roomId) {
-          room.state.messages = room.state.messages.map(m => {
-            if (m.id === data.message_id) {
-              const reactions = (m.reactions || []).filter(r => r.id !== data.reaction_id);
-              return { ...m, reactions };
-            }
-            return m;
-          });
-        }
-      });
-
-      // Load room data
-      await Promise.all([
-        loadRoomDetails(roomId),
-        loadRoomMessages(roomId),
-        loadRoomMembers(roomId)
-      ]);
-
-      room.state.loading = false;
-
-      // Cleanup on unmount
-      return () => {
-        unsubscribe();
-      };
+        await nav(`/rooms/${response.room.id}`);
+      }
     } catch (err) {
-      console.error('❌ Error loading room:', err);
-      room.state.error = err.message || "Failed to load room";
-      room.state.loading = false;
+      room.state.error = err.message || "Failed to create room";
     }
+  });
+
+  const handleJoinRoom = $(async (joinRoomId) => {
+    try {
+      await roomsApi.joinRoom(joinRoomId);
+
+      showJoinModal.value = false;
+      room.state.successMessage = "Joined room successfully!";
+      setTimeout(() => (room.state.successMessage = null), 3000);
+
+      // Reload room list to include new room
+      const response = await roomsApi.getUserRooms();
+      room.state.rooms = response.rooms || [];
+
+      await nav(`/rooms/${joinRoomId}`);
+    } catch (err) {
+      room.state.error = err.message || "Failed to join room";
+    }
+  });
+
+  const handleRoomSelect = $(async (selectedRoom) => {
+    console.log('🎯 Room selected:', selectedRoom.id);
+
+    // Close mobile room list
+    if (room.showRoomList) {
+      room.showRoomList.value = false;
+    }
+
+    await nav(`/rooms/${selectedRoom.id}`);
+  });
+
+  const handleSearchChange = $((query) => {
+    room.state.searchQuery = query;
   });
 
   const handleSendMessage = $(async (data) => {
     if (!roomId) return;
 
-    // Create temp message for instant UI feedback
     const tempId = `temp-${Date.now()}`;
     const tempMessage = {
       id: tempId,
       sender_id: auth.user.value.id,
       sender_username: auth.user.value.username,
       sender_gender: auth.user.value.gender,
-      content: data.type === 'text' ? data.content : data.content,
+      content: data.content,
       type: data.type,
       caption: data.caption,
       created_at: new Date().toISOString(),
@@ -202,15 +226,13 @@ export default component$(() => {
       }),
     };
 
-    // Add to UI immediately
-    room.state.messages = [...room.state.messages, tempMessage];
+    // Add optimistically
+    addMessage(room.state, roomId, tempMessage);
 
-    // Clear reply state
     const replyId = room.state.replyingTo?.id || null;
     room.state.replyingTo = null;
 
     try {
-      // Send to backend
       const response = await roomsApi.sendMessage(
         roomId,
         data.content,
@@ -220,14 +242,15 @@ export default component$(() => {
         data.caption
       );
 
-      // Replace temp message with real one
-      room.state.messages = room.state.messages.map(m =>
-        m.id === tempId ? { ...response.message, isOwn: true } : m
-      );
-
+      // Update with real message
+      updateMessage(room.state, roomId, tempId, {
+        ...response.message,
+        isOwn: true,
+        sending: false
+      });
     } catch (err) {
-      // Remove temp message on error
-      room.state.messages = room.state.messages.filter(m => m.id !== tempId);
+      // Remove failed message
+      removeMessage(room.state, roomId, tempId);
       room.state.error = err.message || "Failed to send message";
     }
   });
@@ -264,7 +287,7 @@ export default component$(() => {
     try {
       room.state.deletingMessageId = messageId;
       await roomsApi.deleteMessage(roomId, messageId);
-      room.state.messages = room.state.messages.filter((m) => m.id !== messageId);
+      removeMessage(room.state, roomId, messageId);
       room.state.successMessage = "Message deleted";
       setTimeout(() => (room.state.successMessage = null), 3000);
     } catch (err) {
@@ -276,7 +299,7 @@ export default component$(() => {
 
   const handleImageClick = $((messageId, url) => {
     if (!room.state.imageViewer.isBuilt) {
-      room.state.imageViewer.images = room.state.messages
+      room.state.imageViewer.images = messages.value
         .filter(m => m.type === 'image' || m.type === 'gif')
         .map(m => ({
           id: m.id,
@@ -316,23 +339,17 @@ export default component$(() => {
   const handleImageReact = $(async (messageId, emoji) => {
     try {
       await roomsApi.reactToMessage(roomId, messageId, emoji);
-      
-      room.state.messages = room.state.messages.map(m => {
-        if (m.id === messageId) {
-          const reactions = m.reactions || [];
-          return { ...m, reactions: [...reactions, { id: Date.now(), emoji, user_id: auth.user.value.id }] };
-        }
-        return m;
-      });
 
-      const imgIndex = room.state.imageViewer.currentIndex;
-      const currentImg = room.state.imageViewer.images[imgIndex];
-      if (currentImg) {
-        const reactions = currentImg.reactions || [];
-        room.state.imageViewer.images[imgIndex] = {
-          ...currentImg,
-          reactions: [...reactions, { id: Date.now(), emoji, user_id: auth.user.value.id }]
-        };
+      // Find message first, then update
+      const message = room.state.roomsCache[roomId]?.messages?.find(m => m.id === messageId);
+      if (message) {
+        updateMessage(room.state, roomId, messageId, {
+          reactions: [...(message.reactions || []), {
+            id: Date.now(),
+            emoji,
+            user_id: auth.user.value.id
+          }]
+        });
       }
 
       room.state.successMessage = "Reaction added!";
@@ -363,31 +380,6 @@ export default component$(() => {
     }
   });
 
-  const handleBack = $(() => {
-    nav("/rooms");
-  });
-
-  const handleShowMembers = $(() => {
-    room.showMembers.value = !room.showMembers.value;
-  });
-
-  const handleCancelReply = $(() => {
-    room.state.replyingTo = null;
-  });
-
-  const handleClearError = $(() => {
-    room.state.error = null;
-  });
-
-  const handleClearSuccess = $(() => {
-    room.state.successMessage = null;
-  });
-
-  const handleMembersClose = $(() => {
-    room.showMembers.value = false;
-  });
-
-  // Show loading while room ID is being validated
   if (!roomId) {
     return (
       <div class="fixed inset-0 top-16 flex items-center justify-center bg-gray-50">
@@ -400,14 +392,31 @@ export default component$(() => {
   }
 
   return (
-    <div class="fixed inset-0 top-16 flex sm:gap-3 sm:p-3 bg-gray-50 sm:bg-transparent">
+    <div class="fixed inset-0 top-16 flex flex-col sm:flex-row sm:gap-3 sm:p-3 bg-gray-50 sm:bg-transparent">
+      {/* Room List Sidebar */}
+      <div class={`${room.showRoomList?.value === false ? "hidden" : "flex"} sm:flex w-full sm:w-72 lg:w-80 bg-white sm:border sm:border-gray-200 sm:rounded-lg flex-col overflow-hidden h-full`}>
+        <RoomList
+          rooms={room.state.rooms}
+          currentRoomId={roomId}
+          searchQuery={room.state.searchQuery}
+          loading={room.state.loading && room.state.rooms.length === 0}
+          onSearchChange={handleSearchChange}
+          onRoomSelect={handleRoomSelect}
+          onCreateClick={$(() => showCreateModal.value = true)}
+          onJoinClick={$(async () => {
+            await loadPublicRooms();
+            showJoinModal.value = true;
+          })}
+        />
+      </div>
+
       {/* Main Chat Area */}
-      <div class="flex-1 flex">
+      <div class={`${room.showRoomList?.value === false ? "flex" : "hidden"} sm:flex flex-1 bg-white sm:border sm:border-gray-200 sm:rounded-lg flex-col overflow-hidden h-full`}>
         <RoomChat
-          currentRoom={room.state.currentRoom}
-          messages={room.state.messages}
-          onBack={handleBack}
-          onShowMembers={handleShowMembers}
+          currentRoom={currentRoom.value}
+          messages={messages.value}
+          onBack={$(() => room.showRoomList ? room.showRoomList.value = true : null)}
+          onShowMembers={$(() => room.showMembers.value = !room.showMembers.value)}
           onSendMessage={handleSendMessage}
           onMessageClick={handleMessageClick}
           onUsernameClick={handleUsernameClick}
@@ -416,11 +425,11 @@ export default component$(() => {
           selectedMessageId={room.selectedMessageId.value}
           deletingMessageId={room.state.deletingMessageId}
           replyingTo={room.state.replyingTo}
-          onCancelReply={handleCancelReply}
+          onCancelReply={$(() => room.state.replyingTo = null)}
           successMessage={room.state.successMessage}
           error={room.state.error}
-          onClearError={handleClearError}
-          onClearSuccess={handleClearSuccess}
+          onClearError={$(() => room.state.error = null)}
+          onClearSuccess={$(() => room.state.successMessage = null)}
           currentUserId={auth.user.value?.id}
         />
       </div>
@@ -429,11 +438,25 @@ export default component$(() => {
       {room.showMembers.value && (
         <RoomMembersList
           isOpen={room.showMembers.value}
-          onClose={handleMembersClose}
-          members={room.state.members}
+          onClose={$(() => room.showMembers.value = false)}
+          members={members.value}
           currentUserId={auth.user.value?.id}
         />
       )}
+
+      {/* Modals */}
+      <CreateRoomModal
+        isOpen={showCreateModal.value}
+        onClose={$(() => showCreateModal.value = false)}
+        onSubmit={handleCreateRoom}
+      />
+
+      <JoinRoomModal
+        isOpen={showJoinModal.value}
+        onClose={$(() => showJoinModal.value = false)}
+        onJoin={handleJoinRoom}
+        publicRooms={publicRooms.value}
+      />
 
       {/* Image Viewer */}
       <ImageViewer
