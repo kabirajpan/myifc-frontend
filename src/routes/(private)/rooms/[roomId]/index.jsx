@@ -788,7 +788,7 @@ export default component$(() => {
   const room = useRoomContext();
   const users = useUserContext();
 
-  const roomId = location.params.roomId;
+  // const roomId = location.params.roomId;
 
   // Room state
   const currentRoom = useSignal(null);
@@ -846,26 +846,23 @@ export default component$(() => {
     previousMessagesLength.value = room.state.messages.length;
   });
 
-  // Load room data and setup WebSocket
-  const loadRoomData = $(async () => {
+  const loadRoomData = $(async (currentRoomId) => {
     try {
       const [roomData, messagesData, membersData] = await Promise.all([
-        roomsApi.getRoom(roomId),
-        roomsApi.getMessages(roomId),
-        roomsApi.getMembers(roomId),
+        roomsApi.getRoom(currentRoomId),
+        roomsApi.getMessages(currentRoomId),
+        roomsApi.getMembers(currentRoomId),
       ]);
 
       currentRoom.value = roomData.room;
       members.value = membersData.members || [];
       hasJoined.value = members.value.some(m => m.user_id === auth.user.value?.id);
 
-      // Convert messages to same format as chat
       room.state.messages = (messagesData.messages || []).map(msg => ({
         ...msg,
         isOwn: msg.sender_id === auth.user.value?.id,
       }));
 
-      // Load room list for sidebar
       const roomsData = await roomsApi.getAllRooms();
       room.state.rooms = roomsData.rooms || [];
 
@@ -880,11 +877,11 @@ export default component$(() => {
     }
   });
 
-  // WebSocket message handler (adapted for rooms)
+  // Update WebSocket handler to use location.params.roomId directly:
   const handleWebSocketMessage = $((data) => {
     if (data.type === "new_message") {
-      // For rooms, we need to check if message belongs to current room
-      if (data.data?.room_id === roomId) {
+      // Use location.params.roomId which is reactive
+      if (data.data?.room_id === location.params.roomId) {
         const newMsg = {
           ...data.data.message,
           isOwn: data.data.message.sender_id === auth.user.value?.id,
@@ -916,26 +913,39 @@ export default component$(() => {
       }
     }
 
-    // Handle member updates
     if (data.type === "user_joined_room" || data.type === "user_left_room") {
-      if (data.data?.room_id === roomId) {
-        // Update members list
-        loadRoomData();
+      if (data.data?.room_id === location.params.roomId) {
+        loadRoomData(location.params.roomId);
       }
     }
   });
 
-  // Initialize
-  useVisibleTask$(async ({ cleanup }) => {
+  useVisibleTask$(async ({ track, cleanup }) => {
+    // Track location.params.roomId changes
+    const currentRoomId = track(() => location.params.roomId);
+
+    if (!currentRoomId) return;
+
     try {
       room.state.loading = true;
+
+      // Reset state when switching rooms
+      room.state.messages = [];
+      room.state.imageViewer = {
+        isOpen: false,
+        images: [],
+        currentIndex: 0,
+        isBuilt: false,
+      };
+      replyingTo.value = null;
+      secretReplyTo.value = null;
+      selectedMedia.value = null;
 
       wsService.connect();
       const unsubscribe = wsService.onMessage(handleWebSocketMessage);
 
-      await loadRoomData();
+      await loadRoomData(currentRoomId);
 
-      // Countdown timer for expiring rooms
       const interval = setInterval(() => {
         if (currentRoom.value?.will_expire && timeLeft.value > 0) {
           timeLeft.value = Math.max(0, timeLeft.value - 1000);
@@ -948,11 +958,10 @@ export default component$(() => {
 
       room.state.loading = false;
 
-      return () => {
+      cleanup(() => {
         unsubscribe();
-        wsService.disconnect();
         clearInterval(interval);
-      };
+      });
     } catch (err) {
       room.state.error = err.message;
       room.state.loading = false;
@@ -962,9 +971,9 @@ export default component$(() => {
   // Room actions
   const handleJoinRoom = $(async () => {
     try {
-      await roomsApi.joinRoom(roomId);
+      await roomsApi.joinRoom(location.params.roomId); // ✅ FIX
       hasJoined.value = true;
-      await loadRoomData();
+      await loadRoomData(location.params.roomId); // ✅ FIX
       room.state.successMessage = "Joined room!";
       setTimeout(() => (room.state.successMessage = null), 3000);
     } catch (err) {
@@ -974,9 +983,9 @@ export default component$(() => {
 
   const handleLeaveRoom = $(async () => {
     if (!confirm("Are you sure you want to leave this room?")) return;
-
+  
     try {
-      await roomsApi.leaveRoom(roomId);
+      await roomsApi.leaveRoom(location.params.roomId); // ✅ FIX
       nav("/rooms");
     } catch (err) {
       room.state.error = err.message;
@@ -985,9 +994,9 @@ export default component$(() => {
 
   const handleDeleteRoom = $(async () => {
     if (!confirm("Are you sure you want to delete this room? This cannot be undone.")) return;
-
+  
     try {
-      await roomsApi.deleteRoom(roomId);
+      await roomsApi.deleteRoom(location.params.roomId); // ✅ FIX
       nav("/rooms");
     } catch (err) {
       room.state.error = err.message;
@@ -996,7 +1005,7 @@ export default component$(() => {
 
   // Message sending (same as chat but adapted for rooms)
   const handleMediaSend = $(async (messageText) => {
-    if (!roomId) return;
+    if (!location.params.roomId) return; 
     if (!selectedMedia.value) return;
 
     if (selectedMedia.value.uploading) {
@@ -1049,10 +1058,10 @@ export default component$(() => {
 
     try {
       // Send to backend - use publicId as content
-      await roomsApi.sendMessage(roomId, publicId, mediaType, replyId, null, caption);
+      await roomsApi.sendMessage(location.params.roomId, publicId, mediaType, replyId, null, caption);
 
       // Refresh messages
-      const messagesData = await roomsApi.getMessages(roomId);
+      const messagesData = await roomsApi.getMessages(location.params.roomId);
       room.state.messages = (messagesData.messages || []).map(msg => ({
         ...msg,
         isOwn: msg.sender_id === auth.user.value?.id,
@@ -1077,7 +1086,7 @@ export default component$(() => {
     const messageText = newMessage.value?.trim();
     if (!messageText) return;
 
-    if (!roomId) {
+    if (!location.params.roomId) {
       room.state.error = 'No room selected';
       return;
     }
@@ -1115,10 +1124,10 @@ export default component$(() => {
 
     try {
       // Send to backend
-      await roomsApi.sendMessage(roomId, messageText, "text", replyId, secretReplyTo.value?.user_id);
+      await roomsApi.sendMessage(location.params.roomId, messageText, "text", replyId, secretReplyTo.value?.user_id);
 
       // Refresh messages
-      const messagesData = await roomsApi.getMessages(roomId);
+      const messagesData = await roomsApi.getMessages(location.params.roomId);
       room.state.messages = (messagesData.messages || []).map(msg => ({
         ...msg,
         isOwn: msg.sender_id === auth.user.value?.id,
@@ -1174,7 +1183,7 @@ export default component$(() => {
 
     try {
       room.state.deletingMessageId = messageId;
-      await roomsApi.deleteMessage(roomId, messageId);
+      await roomsApi.deleteMessage(location.params.roomId, messageId);
       room.state.messages = room.state.messages.filter((m) => m.id !== messageId);
       room.state.successMessage = "Message deleted";
       setTimeout(() => (room.state.successMessage = null), 3000);
@@ -1205,7 +1214,7 @@ export default component$(() => {
 
     try {
       // 3️⃣ Call API in background
-      const response = await roomsApi.reactToMessage(roomId, messageId, emoji);
+      const response = await roomsApi.reactToMessage(location.params.roomId, messageId, emoji);
       const realReaction = response.data;
 
       // 4️⃣ Replace temp with real reaction
@@ -1248,7 +1257,7 @@ export default component$(() => {
 
     try {
       // 3️⃣ Call API in background
-      await roomsApi.removeReaction(roomId, reactionId);
+      await roomsApi.removeReaction(location.params.roomId, reactionId);
 
     } catch (err) {
       // 4️⃣ Rollback on error - add reaction back
@@ -1422,7 +1431,7 @@ export default component$(() => {
               <RoomListItem
                 key={roomItem.id}
                 room={roomItem}
-                isSelected={roomId === roomItem.id}
+                isSelected={location.params.roomId === roomItem.id}
                 unreadCount={roomItem.unread_count || 0}
                 onSelect={$(() => {
                   showRoomList.value = false; // ✅ ADD THIS
@@ -1753,7 +1762,7 @@ export default component$(() => {
           }
 
           try {
-            const response = await roomsApi.reactToMessage(roomId, messageId, emoji);
+            const response = await roomsApi.reactToMessage(location.params.roomId, messageId, emoji);
             const realReaction = response.data;
 
             // Replace temp with real in messages
@@ -1799,7 +1808,7 @@ export default component$(() => {
         })}
         onReport={$(async (messageId, reason, details) => {
           try {
-            await roomsApi.reportMessage(roomId, messageId, reason, details);
+            await roomsApi.reportMessage(location.params.roomId, messageId, reason, details);
             room.state.successMessage = "Report submitted successfully";
             setTimeout(() => (room.state.successMessage = null), 3000);
           } catch (err) {
