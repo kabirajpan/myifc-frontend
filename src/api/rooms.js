@@ -6,10 +6,10 @@ export const roomsApi = {
   getPublicRooms: async () => {
     return await api.get(API_CONFIG.ENDPOINTS.GET_PUBLIC_ROOMS, { requiresAuth: false });
   },
-  
+
   // Get all rooms
   getAllRooms: async () => {
-    return await api.get(API_CONFIG.ENDPOINTS.GET_ROOMS, { requiresAuth: true });
+    return await api.get(API_CONFIG.ENDPOINTS.GET_ALL_ROOMS, { requiresAuth: true });
   },
 
   // Create room
@@ -40,9 +40,9 @@ export const roomsApi = {
   sendMessage: async (roomId, content, type = 'text', replyTo = null, secretTo = null, caption = null) => {
     return await api.post(
       `${API_CONFIG.ENDPOINTS.SEND_ROOM_MESSAGE}/${roomId}/messages`,
-      { 
-        content, 
-        type, 
+      {
+        content,
+        type,
         reply_to: replyTo,      // NEW: message_id to reply to
         secret_to: secretTo,    // NEW: user_id for secret messages
         caption                // NEW: caption for media messages
@@ -67,6 +67,23 @@ export const roomsApi = {
   // Delete room
   deleteRoom: async (roomId) => {
     return await api.delete(`${API_CONFIG.ENDPOINTS.DELETE_ROOM}/${roomId}`, { requiresAuth: true });
+  },
+
+  // ADD THIS - Delete room message
+  deleteMessage: async (roomId, messageId) => {
+    return await api.delete(
+      `${API_CONFIG.ENDPOINTS.SEND_ROOM_MESSAGE}/${roomId}/messages/${messageId}`,
+      { requiresAuth: true }
+    );
+  },
+
+  // ADD THIS - Report room message  
+  reportMessage: async (roomId, messageId, reason, details) => {
+    return await api.post(
+      `/api/rooms/${roomId}/messages/${messageId}/report`,
+      { reason, details },
+      { requiresAuth: true }
+    );
   },
 
   // NEW: React to room message

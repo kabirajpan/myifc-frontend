@@ -5,7 +5,7 @@ import { roomsApi } from "../../../../api/rooms";
 import { friendsApi } from "../../../../api/friends";
 import { mediaApi } from "../../../../api/media.js";
 import { wsService } from "../../../../api/websocket";
-import { useChatContext } from "../../../../store/chat.store";
+import { useRoomContext } from "../../../../store/room.store";
 import { useUserContext } from "../../../../store/user.store";
 import { MediaUpload, MediaPreview } from "../../../../components/ui/MediaUpload.jsx";
 import { ImageViewer } from "../../../../components/ui/ImageViewer.jsx";
@@ -185,6 +185,8 @@ export const MessageBubble = component$(({
   onImageClick,
   deletingMessageId,
   auth,
+  onReactToMessage,
+  onRemoveReaction,
 }) => {
   const hasReply = msg.reply_to_message_id && msg.reply_to_message_content;
   const isMediaMessage = ["image", "gif", "audio"].includes(msg.type);
@@ -248,12 +250,70 @@ export const MessageBubble = component$(({
           </div>
 
           <div class={`flex ${isOwn ? 'justify-end' : 'justify-start'}`}>
-            <img
-              src={msg.content}
-              alt={msg.type}
-              class="max-w-[150px] max-h-[100px] rounded-lg shadow-sm cursor-pointer hover:opacity-90 transition-opacity object-cover"
-              onClick$={() => onImageClick(msg.id, msg.content)}
-            />
+            <div class="inline-block">
+              <img
+                src={msg.content}
+                alt={msg.type}
+                class="max-w-[150px] max-h-[100px] rounded-lg shadow-sm cursor-pointer hover:opacity-90 transition-opacity object-cover"
+                onClick$={() => onImageClick(msg.id, msg.content)}
+              />
+
+              {/* ✅ ADD REACTIONS BELOW IMAGE */}
+              {msg.reactions && msg.reactions.length > 0 && (
+                <div class="flex flex-wrap gap-1 mt-1">
+                  {/* Group reactions by emoji */}
+                  {Object.entries(
+                    msg.reactions.reduce((acc, reaction) => {
+                      if (!acc[reaction.emoji]) {
+                        acc[reaction.emoji] = [];
+                      }
+                      acc[reaction.emoji].push(reaction);
+                      return acc;
+                    }, {})
+                  ).map(([emoji, reactions]) => {
+                    const userReacted = reactions.some(r => r.user_id === auth.user.value?.id);
+                    const userReaction = reactions.find(r => r.user_id === auth.user.value?.id);
+
+                    return (
+                      <button
+                        key={emoji}
+                        onClick$={() => {
+                          if (userReacted && userReaction) {
+                            // Remove reaction
+                            onRemoveReaction(msg.id, userReaction.id);
+                          } else {
+                            // Add reaction
+                            onReactToMessage(msg.id, emoji);
+                          }
+                        }}
+                        class={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs transition-all ${userReacted
+                          ? 'bg-pink-100 border border-pink-300 text-pink-700'
+                          : 'bg-gray-100 border border-gray-200 text-gray-700 hover:bg-gray-200'
+                          }`}
+                        title={reactions.map(r => r.username || 'User').join(', ')}
+                      >
+                        <span>{emoji}</span>
+                        <span class="font-medium">{reactions.length}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* ✅ ADD QUICK REACT BUTTON */}
+              <div class="flex gap-1 mt-1">
+                {['❤️', '👍', '😂', '😮', '😢'].map(emoji => (
+                  <button
+                    key={emoji}
+                    onClick$={() => onReactToMessage(msg.id, emoji)}
+                    class="w-6 h-6 flex items-center justify-center hover:bg-gray-100 rounded transition-colors text-sm"
+                    title={`React with ${emoji}`}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       );
@@ -280,6 +340,7 @@ export const MessageBubble = component$(({
             />
             <span class="text-xs text-gray-600">Audio message</span>
 
+
             <a
               href={msg.content}
               download
@@ -289,7 +350,7 @@ export const MessageBubble = component$(({
               <LuDownload class="w-4 h-4" />
             </a>
           </div>
-        </div>
+        </div >
       );
     }
     return null;
@@ -619,8 +680,8 @@ export const MembersSidebar = component$(({
               <div class="relative">
                 <div
                   class={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium border-2 bg-white ${member.user_id === auth.user.value?.id
-                      ? "border-pink-600 text-pink-600"
-                      : ""
+                    ? "border-pink-600 text-pink-600"
+                    : ""
                     }`}
                   style={
                     member.user_id !== auth.user.value?.id
@@ -688,13 +749,13 @@ export default component$(() => {
   const auth = useAuth();
 
   // Use stores (same as chat)
-  const chat = useChatContext();
+  const room = useRoomContext();
   const users = useUserContext();
 
   const roomId = location.params.roomId;
 
   // Room state
-  const room = useSignal(null);
+  const currentRoom = useSignal(null);
   const members = useSignal([]);
   const timeLeft = useSignal(null);
 
@@ -734,17 +795,17 @@ export default component$(() => {
 
   // Auto-scroll on new messages (same as chat)
   useVisibleTask$(({ track }) => {
-    track(() => chat.state.messages);
-    if (!messageContainerRef.value || chat.state.messages.length === 0) return;
+    track(() => room.state.messages);
+    if (!messageContainerRef.value || room.state.messages.length === 0) return;
 
     const isUserScrollingUp = !isAtBottom.value;
-    const isNewMessage = chat.state.messages.length > previousMessagesLength.value;
+    const isNewMessage = room.state.messages.length > previousMessagesLength.value;
     const isInitialLoad = previousMessagesLength.value === 0;
 
     if (isInitialLoad || (!isUserScrollingUp && isNewMessage)) {
       scrollToBottom();
     }
-    previousMessagesLength.value = chat.state.messages.length;
+    previousMessagesLength.value = room.state.messages.length;
   });
 
   // Load room data and setup WebSocket
@@ -756,24 +817,28 @@ export default component$(() => {
         roomsApi.getMembers(roomId),
       ]);
 
-      room.value = roomData.room;
+      currentRoom.value = roomData.room;
       members.value = membersData.members || [];
       hasJoined.value = members.value.some(m => m.user_id === auth.user.value?.id);
 
       // Convert messages to same format as chat
-      chat.state.messages = (messagesData.messages || []).map(msg => ({
+      room.state.messages = (messagesData.messages || []).map(msg => ({
         ...msg,
         isOwn: msg.sender_id === auth.user.value?.id,
       }));
 
-      if (room.value.will_expire) {
-        timeLeft.value = room.value.time_left_ms;
+      // Load room list for sidebar
+      const roomsData = await roomsApi.getAllRooms();
+      room.state.rooms = roomsData.rooms || [];
+
+      if (currentRoom.value.will_expire) {
+        timeLeft.value = currentRoom.value.time_left_ms;
       }
 
-      chat.state.loading = false;
+      room.state.loading = false;
     } catch (err) {
-      chat.state.error = err.message;
-      chat.state.loading = false;
+      room.state.error = err.message;
+      room.state.loading = false;
     }
   });
 
@@ -787,13 +852,13 @@ export default component$(() => {
           isOwn: data.data.message.sender_id === auth.user.value?.id,
         };
 
-        const exists = chat.state.messages.some(m => m.id === newMsg.id);
+        const exists = room.state.messages.some(m => m.id === newMsg.id);
         if (!exists) {
-          chat.state.messages = [...chat.state.messages, newMsg];
+          room.state.messages = [...room.state.messages, newMsg];
 
-          if (chat.state.imageViewer.isBuilt && (newMsg.type === 'image' || newMsg.type === 'gif')) {
-            chat.state.imageViewer.images = [
-              ...chat.state.imageViewer.images,
+          if (room.state.imageViewer.isBuilt && (newMsg.type === 'image' || newMsg.type === 'gif')) {
+            room.state.imageViewer.images = [
+              ...room.state.imageViewer.images,
               {
                 id: newMsg.id,
                 url: newMsg.content,
@@ -825,7 +890,7 @@ export default component$(() => {
   // Initialize
   useVisibleTask$(async ({ cleanup }) => {
     try {
-      chat.state.loading = true;
+      room.state.loading = true;
 
       wsService.connect();
       const unsubscribe = wsService.onMessage(handleWebSocketMessage);
@@ -834,16 +899,16 @@ export default component$(() => {
 
       // Countdown timer for expiring rooms
       const interval = setInterval(() => {
-        if (room.value?.will_expire && timeLeft.value > 0) {
+        if (currentRoom.value?.will_expire && timeLeft.value > 0) {
           timeLeft.value = Math.max(0, timeLeft.value - 1000);
           if (timeLeft.value <= 0) {
-            chat.state.error = "This room has expired";
+            room.state.error = "This room has expired";
             nav("/rooms");
           }
         }
       }, 1000);
 
-      chat.state.loading = false;
+      room.state.loading = false;
 
       return () => {
         unsubscribe();
@@ -851,8 +916,8 @@ export default component$(() => {
         clearInterval(interval);
       };
     } catch (err) {
-      chat.state.error = err.message;
-      chat.state.loading = false;
+      room.state.error = err.message;
+      room.state.loading = false;
     }
   });
 
@@ -862,10 +927,10 @@ export default component$(() => {
       await roomsApi.joinRoom(roomId);
       hasJoined.value = true;
       await loadRoomData();
-      chat.state.successMessage = "Joined room!";
-      setTimeout(() => (chat.state.successMessage = null), 3000);
+      room.state.successMessage = "Joined room!";
+      setTimeout(() => (room.state.successMessage = null), 3000);
     } catch (err) {
-      chat.state.error = err.message;
+      room.state.error = err.message;
     }
   });
 
@@ -876,7 +941,7 @@ export default component$(() => {
       await roomsApi.leaveRoom(roomId);
       nav("/rooms");
     } catch (err) {
-      chat.state.error = err.message;
+      room.state.error = err.message;
     }
   });
 
@@ -887,7 +952,7 @@ export default component$(() => {
       await roomsApi.deleteRoom(roomId);
       nav("/rooms");
     } catch (err) {
-      chat.state.error = err.message;
+      room.state.error = err.message;
     }
   });
 
@@ -897,12 +962,12 @@ export default component$(() => {
     if (!selectedMedia.value) return;
 
     if (selectedMedia.value.uploading) {
-      chat.state.error = 'Please wait for upload to complete';
+      room.state.error = 'Please wait for upload to complete';
       return;
     }
 
     if (!selectedMedia.value.publicId) {
-      chat.state.error = 'Upload failed, please try again';
+      room.state.error = 'Upload failed, please try again';
       selectedMedia.value = null;
       return;
     }
@@ -936,7 +1001,7 @@ export default component$(() => {
       }),
     };
 
-    chat.state.messages = [...chat.state.messages, tempMessage];
+    room.state.messages = [...room.state.messages, tempMessage];
     const replyId = replyingTo.value?.id || null;
     selectedMedia.value = null;
     replyingTo.value = null;
@@ -945,21 +1010,21 @@ export default component$(() => {
     scrollToBottom();
 
     try {
-      // Send to backend - rooms API might need different parameters
-      await roomsApi.sendMessage(roomId, caption || "", mediaType, replyId);
+      // Send to backend - use publicId as content
+      await roomsApi.sendMessage(roomId, publicId, mediaType, replyId, null, caption);
 
       // Refresh messages
       const messagesData = await roomsApi.getMessages(roomId);
-      chat.state.messages = (messagesData.messages || []).map(msg => ({
+      room.state.messages = (messagesData.messages || []).map(msg => ({
         ...msg,
         isOwn: msg.sender_id === auth.user.value?.id,
       }));
 
-      chat.state.successMessage = `${mediaType.charAt(0).toUpperCase() + mediaType.slice(1)} sent!`;
-      setTimeout(() => (chat.state.successMessage = null), 3000);
+      room.state.successMessage = `${mediaType.charAt(0).toUpperCase() + mediaType.slice(1)} sent!`;
+      setTimeout(() => (room.state.successMessage = null), 3000);
     } catch (err) {
-      chat.state.messages = chat.state.messages.filter(m => m.id !== tempId);
-      chat.state.error = err.message || 'Failed to send media';
+      room.state.messages = room.state.messages.filter(m => m.id !== tempId);
+      room.state.error = err.message || 'Failed to send media';
     }
   });
 
@@ -975,7 +1040,7 @@ export default component$(() => {
     if (!messageText) return;
 
     if (!roomId) {
-      chat.state.error = 'No room selected';
+      room.state.error = 'No room selected';
       return;
     }
 
@@ -1003,7 +1068,7 @@ export default component$(() => {
       }),
     };
 
-    chat.state.messages = [...chat.state.messages, tempMessage];
+    room.state.messages = [...room.state.messages, tempMessage];
     const replyId = replyingTo.value?.id || null;
     replyingTo.value = null;
     newMessage.value = "";
@@ -1016,15 +1081,15 @@ export default component$(() => {
 
       // Refresh messages
       const messagesData = await roomsApi.getMessages(roomId);
-      chat.state.messages = (messagesData.messages || []).map(msg => ({
+      room.state.messages = (messagesData.messages || []).map(msg => ({
         ...msg,
         isOwn: msg.sender_id === auth.user.value?.id,
       }));
 
       secretReplyTo.value = null;
     } catch (err) {
-      chat.state.messages = chat.state.messages.filter(m => m.id !== tempId);
-      chat.state.error = err.message || 'Failed to send message';
+      room.state.messages = room.state.messages.filter(m => m.id !== tempId);
+      room.state.error = err.message || 'Failed to send message';
     }
   });
 
@@ -1070,32 +1135,82 @@ export default component$(() => {
     if (!confirm("Delete this message? This cannot be undone.")) return;
 
     try {
-      chat.state.deletingMessageId = messageId;
+      room.state.deletingMessageId = messageId;
       await roomsApi.deleteMessage(roomId, messageId);
-      chat.state.messages = chat.state.messages.filter((m) => m.id !== messageId);
-      chat.state.successMessage = "Message deleted";
-      setTimeout(() => (chat.state.successMessage = null), 3000);
+      room.state.messages = room.state.messages.filter((m) => m.id !== messageId);
+      room.state.successMessage = "Message deleted";
+      setTimeout(() => (room.state.successMessage = null), 3000);
     } catch (err) {
-      chat.state.error = err.message;
+      room.state.error = err.message;
     } finally {
-      chat.state.deletingMessageId = null;
+      room.state.deletingMessageId = null;
     }
   });
 
+  // React to message
+const handleReactToMessage = $(async (messageId, emoji) => {
+  try {
+    await roomsApi.reactToMessage(roomId, messageId, emoji);
+    
+    // Update local state
+    room.state.messages = room.state.messages.map(m => {
+      if (m.id === messageId) {
+        const reactions = m.reactions || [];
+        return { 
+          ...m, 
+          reactions: [...reactions, { 
+            id: Date.now(), 
+            emoji, 
+            user_id: auth.user.value.id,
+            username: auth.user.value.username 
+          }] 
+        };
+      }
+      return m;
+    });
+    
+    room.state.successMessage = "Reaction added!";
+    setTimeout(() => (room.state.successMessage = null), 2000);
+  } catch (err) {
+    room.state.error = err.message || "Failed to add reaction";
+  }
+});
+
+// Remove reaction from message
+const handleRemoveReaction = $(async (messageId, reactionId) => {
+  try {
+    await roomsApi.removeReaction(roomId, reactionId);
+    
+    // Update local state
+    room.state.messages = room.state.messages.map(m => {
+      if (m.id === messageId) {
+        const reactions = (m.reactions || []).filter(r => r.id !== reactionId);
+        return { ...m, reactions };
+      }
+      return m;
+    });
+    
+    room.state.successMessage = "Reaction removed!";
+    setTimeout(() => (room.state.successMessage = null), 2000);
+  } catch (err) {
+    room.state.error = err.message || "Failed to remove reaction";
+  }
+});
+
   const handleSendFriendRequest = $(async () => {
     if (auth.user.value?.is_guest) {
-      chat.state.error = "Guest users cannot send friend requests";
+      room.state.error = "Guest users cannot send friend requests";
       showUserMenu.value = false;
       return;
     }
 
     try {
       await friendsApi.sendRequest(selectedUser.value.user_id);
-      chat.state.successMessage = "Friend request sent!";
-      setTimeout(() => (chat.state.successMessage = null), 3000);
+      room.state.successMessage = "Friend request sent!";
+      setTimeout(() => (room.state.successMessage = null), 3000);
       showUserMenu.value = false;
     } catch (err) {
-      chat.state.error = err.message;
+      room.state.error = err.message;
       showUserMenu.value = false;
     }
   });
@@ -1114,7 +1229,7 @@ export default component$(() => {
 
   const handleBlockUser = $(async () => {
     if (auth.user.value?.is_guest) {
-      chat.state.error = "Guest users cannot block users";
+      room.state.error = "Guest users cannot block users";
       showUserMenu.value = false;
       return;
     }
@@ -1126,17 +1241,17 @@ export default component$(() => {
 
     try {
       await friendsApi.blockUser(selectedUser.value.user_id);
-      chat.state.successMessage = "User blocked";
-      setTimeout(() => (chat.state.successMessage = null), 3000);
+      room.state.successMessage = "User blocked";
+      setTimeout(() => (room.state.successMessage = null), 3000);
       showUserMenu.value = false;
     } catch (err) {
-      chat.state.error = err.message;
+      room.state.error = err.message;
       showUserMenu.value = false;
     }
   });
 
   const renderMessages = () => {
-    if (chat.state.messages.length === 0) {
+    if (room.state.messages.length === 0) {
       return (
         <div class="flex flex-col items-center justify-center py-8">
           <div class="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center mb-2">
@@ -1148,13 +1263,13 @@ export default component$(() => {
       );
     }
 
-    return chat.state.messages.map((msg) => (
+    return room.state.messages.map((msg) => (
       <MessageBubble
         key={msg.id}
         msg={msg}
         isOwn={msg.isOwn}
-        showTime={chat.selectedMessageId.value === msg.id}
-        onMessageClick={$((id) => (chat.selectedMessageId.value = chat.selectedMessageId.value === id ? null : id))}
+        showTime={room.selectedMessageId.value === msg.id}
+        onMessageClick={$((id) => (room.selectedMessageId.value = room.selectedMessageId.value === id ? null : id))}
         onUsernameClick={handleUsernameClick}
         onAvatarClick={$((msg) => handleAvatarClick({ target: document.createElement('div') }, {
           user_id: msg.sender_id,
@@ -1163,24 +1278,26 @@ export default component$(() => {
         }))}
         onDeleteMessage={handleDeleteMessage}
         onImageClick={$((messageId, url) => {
-          if (!chat.state.imageViewer.isBuilt) {
-            chat.state.imageViewer.images = buildImageViewerData(chat.state.messages);
-            chat.state.imageViewer.isBuilt = true;
+          if (!room.state.imageViewer.isBuilt) {
+            room.state.imageViewer.images = buildImageViewerData(room.state.messages);
+            room.state.imageViewer.isBuilt = true;
           }
-          const index = findImageIndex(chat.state.imageViewer.images, messageId);
+          const index = findImageIndex(room.state.imageViewer.images, messageId);
           if (index !== -1) {
-            chat.state.imageViewer.currentIndex = index;
-            chat.state.imageViewer.isOpen = true;
+            room.state.imageViewer.currentIndex = index;
+            room.state.imageViewer.isOpen = true;
           }
         })}
-        deletingMessageId={chat.state.deletingMessageId}
+        deletingMessageId={room.state.deletingMessageId}
         auth={auth}
+        onReactToMessage={handleReactToMessage}  
+    onRemoveReaction={handleRemoveReaction}      
       />
     ));
   };
 
   const canDelete = auth.user.value?.role === "admin" ||
-    room.value?.creator_id === auth.user.value?.id;
+    currentRoom.value?.creator_id === auth.user.value?.id;
 
   return (
     <div class="fixed inset-0 top-16 flex flex-col sm:flex-row sm:gap-3 sm:p-3 bg-gray-50 sm:bg-transparent">
@@ -1202,15 +1319,15 @@ export default component$(() => {
             <input
               type="text"
               placeholder="Search rooms..."
-              value={chat.state.searchQuery}
-              onInput$={(e) => (chat.state.searchQuery = e.target.value)}
+              value={room.state.searchQuery}
+              onInput$={(e) => (room.state.searchQuery = e.target.value)}
               class="w-full pl-8 pr-2 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-pink-500 focus:border-transparent"
             />
           </div>
         </div>
 
         <div class="flex-1 overflow-y-auto">
-          {chat.state.loading && chat.state.rooms?.length === 0 && (
+          {room.state.loading && room.state.rooms?.length === 0 && (
             <div class="flex items-center justify-center py-8">
               <div class="text-center">
                 <div class="w-6 h-6 border-2 border-pink-600 border-t-transparent rounded-full animate-spin mx-auto mb-1"></div>
@@ -1219,7 +1336,7 @@ export default component$(() => {
             </div>
           )}
 
-          {!chat.state.loading && chat.state.rooms?.length === 0 && (
+          {!room.state.loading && room.state.rooms?.length === 0 && (
             <div class="flex flex-col items-center justify-center py-8 px-3">
               <div class="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center mb-2">
                 <LuMessageSquare class="w-5 h-5 text-gray-400" />
@@ -1235,7 +1352,7 @@ export default component$(() => {
           )}
 
           <div class="divide-y divide-gray-100">
-            {chat.state.rooms?.map((roomItem) => (
+            {room.state.rooms?.map((roomItem) => (
               <RoomListItem
                 key={roomItem.id}
                 room={roomItem}
@@ -1250,7 +1367,7 @@ export default component$(() => {
 
       {/* Main Room Area */}
       <div class={`${!showRoomList.value ? "flex" : "hidden"} sm:flex flex-1 bg-white sm:border sm:border-gray-200 sm:rounded-lg flex-col overflow-hidden h-full`}>
-        {!room.value ? (
+        {!currentRoom.value ? (
           <div class="flex-1 flex items-center justify-center p-4">
             <div class="text-center">
               <div class="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
@@ -1263,7 +1380,7 @@ export default component$(() => {
         ) : (
           <div class="flex flex-col h-full">
             <RoomHeader
-              room={room.value}
+              room={currentRoom.value}
               timeLeft={timeLeft.value}
               hasJoined={hasJoined.value}
               membersCount={members.value.length}
@@ -1274,20 +1391,20 @@ export default component$(() => {
               canDelete={canDelete}
             />
 
-            {chat.state.error && (
+            {room.state.error && (
               <div class="flex-shrink-0 mx-3 mt-2 flex items-center gap-2 p-2 bg-red-50 border border-red-100 rounded-lg">
                 <LuAlertCircle class="w-4 h-4 text-red-500 flex-shrink-0" />
-                <p class="text-xs text-red-600 flex-1">{chat.state.error}</p>
-                <button onClick$={() => (chat.state.error = null)} class="text-red-400 hover:text-red-600">
+                <p class="text-xs text-red-600 flex-1">{room.state.error}</p>
+                <button onClick$={() => (room.state.error = null)} class="text-red-400 hover:text-red-600">
                   <LuX class="w-3.5 h-3.5" />
                 </button>
               </div>
             )}
 
-            {chat.state.successMessage && (
+            {room.state.successMessage && (
               <div class="flex-shrink-0 mx-3 mt-2 flex items-center gap-2 p-2 bg-green-50 border border-green-100 rounded-lg">
                 <LuCheckCircle class="w-4 h-4 text-green-500 flex-shrink-0" />
-                <p class="text-xs text-green-600">{chat.state.successMessage}</p>
+                <p class="text-xs text-green-600">{room.state.successMessage}</p>
               </div>
             )}
 
@@ -1315,7 +1432,7 @@ export default component$(() => {
                   onScroll$={checkIfAtBottom}
                   class="flex-1 overflow-y-auto p-3 space-y-1"
                 >
-                  {chat.state.loading && chat.state.messages.length === 0 && (
+                  {room.state.loading && room.state.messages.length === 0 && (
                     <div class="flex items-center justify-center py-8">
                       <div class="text-center">
                         <div class="w-6 h-6 border-2 border-pink-600 border-t-transparent rounded-full animate-spin mx-auto mb-1"></div>
@@ -1326,7 +1443,7 @@ export default component$(() => {
 
                   {renderMessages()}
 
-                  {!isAtBottom.value && chat.state.messages.length > 0 && (
+                  {!isAtBottom.value && room.state.messages.length > 0 && (
                     <div class="sticky bottom-4 flex justify-center">
                       <button
                         onClick$={scrollToBottom}
@@ -1468,7 +1585,7 @@ export default component$(() => {
                               publicId: uploadResult.data.public_id
                             };
                           } catch (err) {
-                            chat.state.error = 'Failed to upload media';
+                            room.state.error = 'Failed to upload media';
                             selectedMedia.value = null;
                           }
                         })}
@@ -1513,73 +1630,73 @@ export default component$(() => {
 
       <ImageViewer
         imageUrl={
-          chat.state.imageViewer.isOpen && chat.state.imageViewer.images[chat.state.imageViewer.currentIndex]
-            ? chat.state.imageViewer.images[chat.state.imageViewer.currentIndex].url
+          room.state.imageViewer.isOpen && room.state.imageViewer.images[room.state.imageViewer.currentIndex]
+            ? room.state.imageViewer.images[room.state.imageViewer.currentIndex].url
             : null
         }
-        isOpen={chat.state.imageViewer.isOpen}
+        isOpen={room.state.imageViewer.isOpen}
         onClose={$(() => {
-          chat.state.imageViewer.isOpen = false;
+          room.state.imageViewer.isOpen = false;
         })}
         messageData={
-          chat.state.imageViewer.isOpen && chat.state.imageViewer.images[chat.state.imageViewer.currentIndex]
-            ? chat.state.imageViewer.images[chat.state.imageViewer.currentIndex]
+          room.state.imageViewer.isOpen && room.state.imageViewer.images[room.state.imageViewer.currentIndex]
+            ? room.state.imageViewer.images[room.state.imageViewer.currentIndex]
             : null
         }
         onPrevious={$(() => {
-          if (chat.state.imageViewer.currentIndex > 0) {
-            chat.state.imageViewer.currentIndex--;
+          if (room.state.imageViewer.currentIndex > 0) {
+            room.state.imageViewer.currentIndex--;
           }
         })}
         onNext={$(() => {
-          if (chat.state.imageViewer.currentIndex < chat.state.imageViewer.images.length - 1) {
-            chat.state.imageViewer.currentIndex++;
+          if (room.state.imageViewer.currentIndex < room.state.imageViewer.images.length - 1) {
+            room.state.imageViewer.currentIndex++;
           }
         })}
-        hasPrevious={chat.state.imageViewer.currentIndex > 0}
-        hasNext={chat.state.imageViewer.currentIndex < chat.state.imageViewer.images.length - 1}
+        hasPrevious={room.state.imageViewer.currentIndex > 0}
+        hasNext={room.state.imageViewer.currentIndex < room.state.imageViewer.images.length - 1}
         onReact={$(async (messageId, emoji) => {
           try {
             await roomsApi.reactToMessage(roomId, messageId, emoji);
-            chat.state.messages = chat.state.messages.map(m => {
+            room.state.messages = room.state.messages.map(m => {
               if (m.id === messageId) {
                 const reactions = m.reactions || [];
                 return { ...m, reactions: [...reactions, { id: Date.now(), emoji, user_id: auth.user.value.id }] };
               }
               return m;
             });
-            const imgIndex = chat.state.imageViewer.currentIndex;
-            const currentImg = chat.state.imageViewer.images[imgIndex];
+            const imgIndex = room.state.imageViewer.currentIndex;
+            const currentImg = room.state.imageViewer.images[imgIndex];
             if (currentImg) {
               const reactions = currentImg.reactions || [];
-              chat.state.imageViewer.images[imgIndex] = {
+              room.state.imageViewer.images[imgIndex] = {
                 ...currentImg,
                 reactions: [...reactions, { id: Date.now(), emoji, user_id: auth.user.value.id }]
               };
             }
-            chat.state.successMessage = "Reaction added!";
-            setTimeout(() => (chat.state.successMessage = null), 2000);
+            room.state.successMessage = "Reaction added!";
+            setTimeout(() => (room.state.successMessage = null), 2000);
           } catch (err) {
-            chat.state.error = err.message || "Failed to add reaction";
+            room.state.error = err.message || "Failed to add reaction";
           }
         })}
         onReport={$(async (messageId, reason, details) => {
           try {
             await roomsApi.reportMessage(roomId, messageId, reason, details);
-            chat.state.successMessage = "Report submitted successfully";
-            setTimeout(() => (chat.state.successMessage = null), 3000);
+            room.state.successMessage = "Report submitted successfully";
+            setTimeout(() => (room.state.successMessage = null), 3000);
           } catch (err) {
-            chat.state.error = err.message || "Failed to submit report";
+            room.state.error = err.message || "Failed to submit report";
           }
         })}
         onShare={$(async (messageId) => {
           try {
-            const currentImg = chat.state.imageViewer.images[chat.state.imageViewer.currentIndex];
+            const currentImg = room.state.imageViewer.images[room.state.imageViewer.currentIndex];
             await navigator.clipboard.writeText(currentImg.url);
-            chat.state.successMessage = "Image URL copied!";
-            setTimeout(() => (chat.state.successMessage = null), 2000);
+            room.state.successMessage = "Image URL copied!";
+            setTimeout(() => (room.state.successMessage = null), 2000);
           } catch (err) {
-            chat.state.error = "Failed to copy URL";
+            room.state.error = "Failed to copy URL";
           }
         })}
       />

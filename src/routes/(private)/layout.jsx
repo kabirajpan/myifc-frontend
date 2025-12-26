@@ -3,6 +3,7 @@ import { useNavigate, Link } from "@builder.io/qwik-city";
 import { useAuth } from "../../context/auth";
 import { useChatStore, ChatContext } from "../../store/chat.store";
 import { useUserStore, UserContext } from "../../store/user.store";
+import { useRoomStore, RoomContext } from "../../store/room.store"; // ADD THIS
 import Header from "../../components/layout/private-navbar";
 
 export default component$(() => {
@@ -12,10 +13,12 @@ export default component$(() => {
   // Initialize stores (only state, no functions)
   const chatStore = useChatStore();
   const userStore = useUserStore();
+  const roomStore = useRoomStore(); // ADD THIS
 
   // Provide contexts to all child components
   useContextProvider(ChatContext, chatStore);
   useContextProvider(UserContext, userStore);
+  useContextProvider(RoomContext, roomStore); // ADD THIS
 
   // Protect private routes - only check authentication
   useVisibleTask$(({ track }) => {

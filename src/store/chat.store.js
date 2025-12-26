@@ -8,16 +8,20 @@ import {
 // Create context
 export const ChatContext = createContextId('chat-context');
 
-// Chat Store Provider - Only state, no functions
+// Chat Store Provider - Only state, no functions (for 1-on-1 chats)
 export const useChatStore = () => {
   // State
   const state = useStore({
-    // Chat sessions
+    // Chat sessions (1-on-1 only)
     chatList: [],
     currentSessionId: null,
     
     // Messages
     messages: [],
+    
+    // Reactions (keyed by message_id)
+    // Structure: { "msg_123": [{ id, user_id, username, gender, emoji, created_at }] }
+    reactions: {},
     
     // UI State
     loading: false,
@@ -36,12 +40,12 @@ export const useChatStore = () => {
     // Search
     searchQuery: "",
     
-    // ✅ NEW: Image Viewer State (Production-ready)
+    // Image Viewer State
     imageViewer: {
       isOpen: false,
-      images: [], // Lightweight array of image data
+      images: [],
       currentIndex: 0,
-      isBuilt: false, // Flag to know if we've already built the array
+      isBuilt: false,
     },
   });
 
@@ -49,12 +53,14 @@ export const useChatStore = () => {
   const showChatList = useSignal(true);
   const showOnlineUsers = useSignal(false);
   const selectedMessageId = useSignal(null);
+  const showEmojiPicker = useSignal(false);
 
   return {
     state,
     showChatList,
     showOnlineUsers,
     selectedMessageId,
+    showEmojiPicker,
   };
 };
 
