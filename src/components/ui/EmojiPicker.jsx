@@ -2,7 +2,7 @@ import { component$, useSignal, $, useOnDocument } from "@builder.io/qwik";
 
 export const EmojiPicker = component$(({ onEmojiSelect, onClose, show }) => {
   const pickerRef = useSignal();
-  
+
   // Emoji categories with commonly used emojis
   const emojiCategories = [
     {
@@ -51,9 +51,9 @@ export const EmojiPicker = component$(({ onEmojiSelect, onClose, show }) => {
 
   return (
     <div 
-      ref={pickerRef}
-      class="fixed sm:absolute bottom-20 sm:bottom-full left-1/2 sm:left-auto sm:right-0 -translate-x-1/2 sm:translate-x-0 mb-2 w-[90vw] max-w-80 sm:w-80 bg-white rounded-lg shadow-2xl border border-gray-200 overflow-hidden z-50"
-    >
+  ref={pickerRef}
+  class="relative w-[90vw] max-w-80 sm:w-80 bg-white rounded-lg shadow-2xl border border-gray-200 overflow-hidden"
+>
       {/* Header */}
       <div class="px-3 py-2 border-b border-gray-200 bg-gray-50">
         <h3 class="text-xs sm:text-sm font-semibold text-gray-900">Emoji Picker</h3>
@@ -65,11 +65,10 @@ export const EmojiPicker = component$(({ onEmojiSelect, onClose, show }) => {
           <button
             key={category.name}
             onClick$={() => (activeCategory.value = index)}
-            class={`px-2 sm:px-3 py-1 sm:py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
-              activeCategory.value === index
+            class={`px-2 sm:px-3 py-1 sm:py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${activeCategory.value === index
                 ? 'bg-pink-100 text-pink-700'
                 : 'text-gray-600 hover:bg-gray-100'
-            }`}
+              }`}
           >
             {category.name}
           </button>

@@ -173,6 +173,7 @@ export const UserMenu = component$(({
   );
 });
 
+
 // MessageBubble component (Same as Chat but adapted for rooms)
 export const MessageBubble = component$(({
   msg,
@@ -187,7 +188,9 @@ export const MessageBubble = component$(({
   auth,
   onReactToMessage,
   onRemoveReaction,
+  onOpenReactionPicker,
 }) => {
+
   const hasReply = msg.reply_to_message_id && msg.reply_to_message_content;
   const isMediaMessage = ["image", "gif", "audio"].includes(msg.type);
   const isSystem = msg.type === "system";
@@ -271,22 +274,23 @@ export const MessageBubble = component$(({
                       return acc;
                     }, {})
                   ).map(([emoji, reactions]) => {
-                    const userReacted = reactions.some(r => r.user_id === auth.user.value?.id);
-                    const userReaction = reactions.find(r => r.user_id === auth.user.value?.id);
+
+                    const userReactionWithThisEmoji = reactions.find(r => r.user_id === auth.user.value?.id);
+                    const hasUserReactedWithThisEmoji = !!userReactionWithThisEmoji;
 
                     return (
                       <button
                         key={emoji}
                         onClick$={() => {
-                          if (userReacted && userReaction) {
-                            // Remove reaction
-                            onRemoveReaction(msg.id, userReaction.id);
+                          if (hasUserReactedWithThisEmoji) {
+                            // Remove reaction - user already reacted with this emoji
+                            onRemoveReaction(msg.id, userReactionWithThisEmoji.id);
                           } else {
-                            // Add reaction
+                            // Add reaction - user hasn't reacted with this emoji yet
                             onReactToMessage(msg.id, emoji);
                           }
                         }}
-                        class={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs transition-all ${userReacted
+                        class={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs transition-all ${hasUserReactedWithThisEmoji
                           ? 'bg-pink-100 border border-pink-300 text-pink-700'
                           : 'bg-gray-100 border border-gray-200 text-gray-700 hover:bg-gray-200'
                           }`}
@@ -300,18 +304,50 @@ export const MessageBubble = component$(({
                 </div>
               )}
 
-              {/* ✅ ADD QUICK REACT BUTTON */}
-              <div class="flex gap-1 mt-1">
-                {['❤️', '👍', '😂', '😮', '😢'].map(emoji => (
+              {/* ✅ QUICK REACT BUTTONS + EMOJI PICKER */}
+              <div class="relative">
+                <div class="flex gap-1 mt-1">
+                  {['❤️', '👍', '😂', '😮', '😢'].map(emoji => {
+                    // Check if user already reacted with this emoji
+                    const existingReaction = (msg.reactions || []).find(
+                      r => r.emoji === emoji && r.user_id === auth.user.value?.id
+                    );
+
+                    return (
+                      <button
+                        key={emoji}
+                        onClick$={() => {
+                          if (existingReaction) {
+                            // Remove if already reacted
+                            onRemoveReaction(msg.id, existingReaction.id);
+                          } else {
+                            // Add if not reacted
+                            onReactToMessage(msg.id, emoji);
+                          }
+                        }}
+                        class={`w-6 h-6 flex items-center justify-center rounded transition-colors text-sm ${existingReaction
+                          ? 'bg-pink-100 border border-pink-300'
+                          : 'hover:bg-gray-100'
+                          }`}
+                        title={`React with ${emoji}`}
+                      >
+                        {emoji}
+                      </button>
+                    );
+                  })}
+
+                  {/* ✅ Plus button to open emoji picker */}
                   <button
-                    key={emoji}
-                    onClick$={() => onReactToMessage(msg.id, emoji)}
-                    class="w-6 h-6 flex items-center justify-center hover:bg-gray-100 rounded transition-colors text-sm"
-                    title={`React with ${emoji}`}
+                    onClick$={(e) => {
+                      e.stopPropagation();
+                      onOpenReactionPicker(msg.id); // ✅ CHANGED
+                    }}
+                    class="w-6 h-6 flex items-center justify-center hover:bg-gray-100 rounded transition-colors text-gray-500 border border-gray-300"
+                    title="More reactions"
                   >
-                    {emoji}
+                    <LuPlus class="w-3.5 h-3.5" />
                   </button>
-                ))}
+                </div>
               </div>
             </div>
           </div>
@@ -776,6 +812,8 @@ export default component$(() => {
   const hasJoined = useSignal(false);
   const showMembers = useSignal(false);
   const showRoomList = useSignal(true);
+  const activeReactionMessageId = useSignal(null);
+
 
   // Scroll functions (same as chat)
   const scrollToBottom = $(() => {
@@ -1147,55 +1185,82 @@ export default component$(() => {
     }
   });
 
-  // React to message
-const handleReactToMessage = $(async (messageId, emoji) => {
-  try {
-    await roomsApi.reactToMessage(roomId, messageId, emoji);
-    
-    // Update local state
+  const handleReactToMessage = $(async (messageId, emoji) => {
+    // 1️⃣ Create temporary reaction for instant UI update
+    const tempReaction = {
+      id: `temp-${Date.now()}`,
+      emoji,
+      user_id: auth.user.value.id,
+      username: auth.user.value.username,
+      created_at: Date.now()
+    };
+
+    // 2️⃣ Optimistically update UI immediately
     room.state.messages = room.state.messages.map(m => {
       if (m.id === messageId) {
-        const reactions = m.reactions || [];
-        return { 
-          ...m, 
-          reactions: [...reactions, { 
-            id: Date.now(), 
-            emoji, 
-            user_id: auth.user.value.id,
-            username: auth.user.value.username 
-          }] 
-        };
+        return { ...m, reactions: [...(m.reactions || []), tempReaction] };
       }
       return m;
     });
-    
-    room.state.successMessage = "Reaction added!";
-    setTimeout(() => (room.state.successMessage = null), 2000);
-  } catch (err) {
-    room.state.error = err.message || "Failed to add reaction";
-  }
-});
 
-// Remove reaction from message
-const handleRemoveReaction = $(async (messageId, reactionId) => {
-  try {
-    await roomsApi.removeReaction(roomId, reactionId);
-    
-    // Update local state
+    try {
+      // 3️⃣ Call API in background
+      const response = await roomsApi.reactToMessage(roomId, messageId, emoji);
+      const realReaction = response.data;
+
+      // 4️⃣ Replace temp with real reaction
+      room.state.messages = room.state.messages.map(m => {
+        if (m.id === messageId) {
+          const reactions = m.reactions.filter(r => r.id !== tempReaction.id);
+          return { ...m, reactions: [...reactions, realReaction] };
+        }
+        return m;
+      });
+
+    } catch (err) {
+      // 5️⃣ Rollback on error
+      room.state.messages = room.state.messages.map(m => {
+        if (m.id === messageId) {
+          const reactions = m.reactions.filter(r => r.id !== tempReaction.id);
+          return { ...m, reactions };
+        }
+        return m;
+      });
+      room.state.error = err.message || "Failed to add reaction";
+    }
+  });
+
+  const handleRemoveReaction = $(async (messageId, reactionId) => {
+    // 1️⃣ Find the reaction to remove
+    const msg = room.state.messages.find(m => m.id === messageId);
+    const reactionToRemove = msg?.reactions?.find(r => r.id === reactionId);
+
+    if (!reactionToRemove) return;
+
+    // 2️⃣ Optimistically remove from UI immediately
     room.state.messages = room.state.messages.map(m => {
       if (m.id === messageId) {
-        const reactions = (m.reactions || []).filter(r => r.id !== reactionId);
+        const reactions = m.reactions.filter(r => r.id !== reactionId);
         return { ...m, reactions };
       }
       return m;
     });
-    
-    room.state.successMessage = "Reaction removed!";
-    setTimeout(() => (room.state.successMessage = null), 2000);
-  } catch (err) {
-    room.state.error = err.message || "Failed to remove reaction";
-  }
-});
+
+    try {
+      // 3️⃣ Call API in background
+      await roomsApi.removeReaction(roomId, reactionId);
+
+    } catch (err) {
+      // 4️⃣ Rollback on error - add reaction back
+      room.state.messages = room.state.messages.map(m => {
+        if (m.id === messageId) {
+          return { ...m, reactions: [...(m.reactions || []), reactionToRemove] };
+        }
+        return m;
+      });
+      room.state.error = err.message || "Failed to remove reaction";
+    }
+  });
 
   const handleSendFriendRequest = $(async () => {
     if (auth.user.value?.is_guest) {
@@ -1290,8 +1355,9 @@ const handleRemoveReaction = $(async (messageId, reactionId) => {
         })}
         deletingMessageId={room.state.deletingMessageId}
         auth={auth}
-        onReactToMessage={handleReactToMessage}  
-    onRemoveReaction={handleRemoveReaction}      
+        onReactToMessage={handleReactToMessage}
+        onRemoveReaction={handleRemoveReaction}
+        onOpenReactionPicker={$((messageId) => activeReactionMessageId.value = messageId)} // ✅ ADD THIS
       />
     ));
   };
@@ -1358,7 +1424,10 @@ const handleRemoveReaction = $(async (messageId, reactionId) => {
                 room={roomItem}
                 isSelected={roomId === roomItem.id}
                 unreadCount={roomItem.unread_count || 0}
-                onSelect={$(() => nav(`/rooms/${roomItem.id}`))}
+                onSelect={$(() => {
+                  showRoomList.value = false; // ✅ ADD THIS
+                  nav(`/rooms/${roomItem.id}`);
+                })}
               />
             ))}
           </div>
@@ -1656,27 +1725,75 @@ const handleRemoveReaction = $(async (messageId, reactionId) => {
         hasPrevious={room.state.imageViewer.currentIndex > 0}
         hasNext={room.state.imageViewer.currentIndex < room.state.imageViewer.images.length - 1}
         onReact={$(async (messageId, emoji) => {
+          // Same optimistic approach
+          const tempReaction = {
+            id: `temp-${Date.now()}`,
+            emoji,
+            user_id: auth.user.value.id,
+            username: auth.user.value.username,
+            created_at: Date.now()
+          };
+
+          // Update messages
+          room.state.messages = room.state.messages.map(m => {
+            if (m.id === messageId) {
+              return { ...m, reactions: [...(m.reactions || []), tempReaction] };
+            }
+            return m;
+          });
+
+          // Update image viewer
+          const imgIndex = room.state.imageViewer.currentIndex;
+          const currentImg = room.state.imageViewer.images[imgIndex];
+          if (currentImg) {
+            room.state.imageViewer.images[imgIndex] = {
+              ...currentImg,
+              reactions: [...(currentImg.reactions || []), tempReaction]
+            };
+          }
+
           try {
-            await roomsApi.reactToMessage(roomId, messageId, emoji);
+            const response = await roomsApi.reactToMessage(roomId, messageId, emoji);
+            const realReaction = response.data;
+
+            // Replace temp with real in messages
             room.state.messages = room.state.messages.map(m => {
               if (m.id === messageId) {
-                const reactions = m.reactions || [];
-                return { ...m, reactions: [...reactions, { id: Date.now(), emoji, user_id: auth.user.value.id }] };
+                const reactions = m.reactions.filter(r => r.id !== tempReaction.id);
+                return { ...m, reactions: [...reactions, realReaction] };
               }
               return m;
             });
-            const imgIndex = room.state.imageViewer.currentIndex;
-            const currentImg = room.state.imageViewer.images[imgIndex];
+
+            // Replace temp with real in image viewer
             if (currentImg) {
-              const reactions = currentImg.reactions || [];
+              const reactions = room.state.imageViewer.images[imgIndex].reactions.filter(r => r.id !== tempReaction.id);
               room.state.imageViewer.images[imgIndex] = {
-                ...currentImg,
-                reactions: [...reactions, { id: Date.now(), emoji, user_id: auth.user.value.id }]
+                ...room.state.imageViewer.images[imgIndex],
+                reactions: [...reactions, realReaction]
               };
             }
+
             room.state.successMessage = "Reaction added!";
             setTimeout(() => (room.state.successMessage = null), 2000);
           } catch (err) {
+            // Rollback both
+            room.state.messages = room.state.messages.map(m => {
+              if (m.id === messageId) {
+                const reactions = m.reactions.filter(r => r.id !== tempReaction.id);
+                return { ...m, reactions };
+              }
+              return m;
+            });
+
+            if (currentImg) {
+              const reactions = room.state.imageViewer.images[imgIndex].reactions.filter(r => r.id !== tempReaction.id);
+              room.state.imageViewer.images[imgIndex] = {
+                ...room.state.imageViewer.images[imgIndex],
+                reactions
+              };
+            }
+
             room.state.error = err.message || "Failed to add reaction";
           }
         })}
@@ -1700,6 +1817,35 @@ const handleRemoveReaction = $(async (messageId, reactionId) => {
           }
         })}
       />
+
+      {/* ✅ ADD THIS - Global Emoji Picker for Reactions (Outside all containers) */}
+      {activeReactionMessageId.value !== null && (
+        <div
+          class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/20"
+          onClick$={() => activeReactionMessageId.value = null}
+        >
+          <div onClick$={(e) => e.stopPropagation()}>
+            <EmojiPicker
+              show={true}
+              onEmojiSelect={$((emoji) => {
+                const msg = room.state.messages.find(m => m.id === activeReactionMessageId.value);
+                if (msg) {
+                  const existingReaction = (msg.reactions || []).find(
+                    r => r.emoji === emoji && r.user_id === auth.user.value?.id
+                  );
+                  if (existingReaction) {
+                    handleRemoveReaction(activeReactionMessageId.value, existingReaction.id);
+                  } else {
+                    handleReactToMessage(activeReactionMessageId.value, emoji);
+                  }
+                }
+                activeReactionMessageId.value = null;
+              })}
+              onClose={$(() => activeReactionMessageId.value = null)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 });
