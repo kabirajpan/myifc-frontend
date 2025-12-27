@@ -10,6 +10,7 @@ import {
     LuCheckCircle,
     LuAlertCircle,
     LuMessageSquare,
+    LuPanelLeft,
 } from "@qwikest/icons/lucide";
 import { MessageBubble } from "./MessageBubble";
 import { EmojiPicker } from "../ui/EmojiPicker";
@@ -41,6 +42,7 @@ export const ChatContainer = component$(
         // DM-specific props
         otherUserGender, // For DM mode
         headerAction, // Optional: custom header action button
+        onToggleUnifiedSidebar, // NEW: Toggle unified sidebar
     }) => {
         const newMessage = useSignal("");
         const showEmojiPicker = useSignal(false);
@@ -282,6 +284,18 @@ export const ChatContainer = component$(
                 {/* Message Input */}
                 <div class="flex-shrink-0 px-3 py-2.5 border-t border-gray-200 bg-white">
                     <div class="flex items-end gap-2">
+                        {/* Toggle Unified Sidebar Button */}
+                        {onToggleUnifiedSidebar && (
+                            <button
+                                onClick$={onToggleUnifiedSidebar}
+                                class="p-2 hover:bg-gray-100 rounded-lg transition-colors flex-shrink-0 self-end"
+                                title="Toggle messages sidebar"
+                                aria-label="Toggle messages sidebar"
+                            >
+                                <LuPanelLeft class="w-5 h-5 text-gray-600" />
+                            </button>
+                        )}
+
                         <div class={`flex-1 relative flex items-end border border-gray-200 rounded-lg focus-within:ring-1 focus-within:ring-${accentColor}-500 focus-within:border-transparent`}>
                             <textarea
                                 value={newMessage.value}

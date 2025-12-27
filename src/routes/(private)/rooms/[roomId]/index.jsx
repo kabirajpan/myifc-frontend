@@ -17,13 +17,20 @@ import { UserList } from "../../../../components/chat/UserList.jsx";
 import { ImageViewer } from "../../../../components/ui/ImageViewer";
 import { CreateRoomModal } from "../../../../components/rooms/CreateRoomModal";
 import { JoinRoomModal } from "../../../../components/rooms/JoinRoomModal";
+import { UnifiedSidebar } from "../../../../components/chat/UnifiedSidebar.jsx";
+import { useUnifiedSidebar } from "../../../../utils/useUnifiedSidebar.js";
 import { roomsApi } from "../../../../api/rooms";
+import { chatApi } from "../../../../api/chat-enhanced";
+import { wsService } from "../../../../api/websocket";
 
 export default component$(() => {
   const auth = useAuth();
   const room = useRoomContext();
   const location = useLocation();
   const nav = useNavigate();
+
+  // Unified sidebar
+  const unifiedSidebar = useUnifiedSidebar();
 
   const roomId = location.params.roomId;
 
@@ -131,13 +138,53 @@ export default component$(() => {
     room.state.imageViewer.isOpen = false;
     room.state.imageViewer.isBuilt = false;
 
+    // Load unified sidebar data
+    try {
+      const [roomsResponse, chatsResponse] = await Promise.all([
+        roomsApi.getUserRooms(),
+        chatApi.getSessions(false),
+      ]);
+      unifiedSidebar.rooms.value = roomsResponse.rooms || [];
+      unifiedSidebar.chats.value = chatsResponse.chats || [];
+    } catch (err) {
+      console.error('Failed to load unified sidebar:', err);
+    }
+
     // Load room data (uses cache if available)
     await loadRoomData(currentRoomId);
+
+    // Setup WebSocket listener for unified sidebar
+    const unsubscribeWs = wsService.onMessage((data) => {
+      if (data.type === "new_message" && data.data.room_id) {
+        const room = unifiedSidebar.rooms.value.find(r => r.id === data.data.room_id);
+        if (room) {
+          let lastMessage = data.data.message.content;
+          if (data.data.message.type === 'image') lastMessage = 'Image';
+          else if (data.data.message.type === 'gif') lastMessage = 'GIF';
+          else if (data.data.message.type === 'audio') lastMessage = 'Voice message';
+          else if (data.data.message.caption) lastMessage = data.data.message.caption;
+
+          unifiedSidebar.rooms.value = unifiedSidebar.rooms.value.map(r =>
+            r.id === data.data.room_id
+              ? {
+                  ...r,
+                  last_message: lastMessage,
+                  last_message_time: data.data.message.created_at,
+                  unread_count: data.data.message.sender_id === auth.user.value?.id
+                    ? r.unread_count
+                    : r.unread_count + 1,
+                }
+              : r
+          );
+        }
+      }
+    });
 
     // Cleanup
     cleanup(() => {
       console.log('🧹 Room cleanup:', currentRoomId);
       room.state.activeRoomId = null;
+      unsubscribeWs();
     });
   });
 
@@ -156,6 +203,10 @@ export default component$(() => {
         if (!exists) {
           room.state.rooms = [...room.state.rooms, response.room];
         }
+        
+        // Update unified sidebar rooms list
+        unifiedSidebar.rooms.value = [...unifiedSidebar.rooms.value, response.room];
+        
         await nav(`/rooms/${response.room.id}`);
       }
     } catch (err) {
@@ -174,6 +225,9 @@ export default component$(() => {
       // Reload room list
       const response = await roomsApi.getUserRooms();
       room.state.rooms = response.rooms || [];
+
+      // Update unified sidebar rooms list
+      unifiedSidebar.rooms.value = response.rooms || [];
 
       await nav(`/rooms/${joinRoomId}`);
     } catch (err) {
@@ -367,6 +421,17 @@ export default component$(() => {
 
   return (
     <div class="fixed inset-0 top-16 flex flex-col sm:flex-row sm:gap-3 sm:p-3 bg-gray-50 sm:bg-transparent">
+      {/* Unified Sidebar */}
+      <UnifiedSidebar
+        isOpen={unifiedSidebar.isOpen.value}
+        onClose={$(() => { unifiedSidebar.isOpen.value = false; })}
+        rooms={unifiedSidebar.rooms.value}
+        chats={unifiedSidebar.chats.value}
+        currentRoomId={roomId}
+        currentChatId={null}
+        loading={false}
+      />
+
       {/* Room List Sidebar */}
       <div class={`${room.showRoomList?.value === false ? "hidden" : "flex"} sm:flex`}>
         <ChatSidebar
@@ -407,6 +472,7 @@ export default component$(() => {
           error={room.state.error}
           onClearError={$(() => (room.state.error = null))}
           onClearSuccess={$(() => (room.state.successMessage = null))}
+          onToggleUnifiedSidebar={$(() => { unifiedSidebar.isOpen.value = !unifiedSidebar.isOpen.value; })}
         />
       </div>
 

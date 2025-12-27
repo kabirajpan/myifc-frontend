@@ -194,18 +194,26 @@ export const ChatSidebar = component$(({
 
                                         {/* Item Info */}
                                         <div class="flex-1 min-w-0">
-                                            <div class="flex items-center justify-between mb-0.5">
+                                            <div class="flex items-center justify-between gap-2 mb-0.5">
                                                 <span class={`font-medium text-xs truncate ${isRoom
                                                         ? "text-gray-900"
                                                         : getGenderColor(itemGender)
                                                     }`}>
                                                     {itemName}
                                                 </span>
-                                                {item.last_message_time && (
-                                                    <span class="text-xs text-gray-500 flex-shrink-0 ml-1">
-                                                        {formatTime(item.last_message_time)}
-                                                    </span>
-                                                )}
+                                                <div class="flex items-center gap-2 flex-shrink-0">
+                                                    {isRoom && (
+                                                        <div class="flex items-center gap-1 text-xs text-gray-500">
+                                                            <LuUsers class="w-3 h-3" />
+                                                            <span>{item.member_count || 0}</span>
+                                                        </div>
+                                                    )}
+                                                    {item.last_message_time && (
+                                                        <span class="text-xs text-gray-500">
+                                                            {formatTime(item.last_message_time)}
+                                                        </span>
+                                                    )}
+                                                </div>
                                             </div>
                                             <div class="flex items-center justify-between">
                                                 <p class="text-xs text-gray-600 truncate flex-1 flex items-center gap-1">
@@ -221,12 +229,6 @@ export const ChatSidebar = component$(({
                                                     </span>
                                                 )}
                                             </div>
-                                            {isRoom && (
-                                                <div class="flex items-center gap-1 mt-1 text-xs text-gray-500">
-                                                    <LuUsers class="w-3 h-3" />
-                                                    <span>{item.member_count || 0} members</span>
-                                                </div>
-                                            )}
                                         </div>
                                     </div>
                                 </div>

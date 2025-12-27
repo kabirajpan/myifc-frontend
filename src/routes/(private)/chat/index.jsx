@@ -4,6 +4,7 @@ import { useAuth } from "../../../context/auth";
 import { useChatContext } from "../../../store/chat.store";
 import { useUserContext } from "../../../store/user.store";
 import { chatApi } from "../../../api/chat-enhanced";
+import { roomsApi } from "../../../api/rooms";
 import { authApi } from "../../../api/auth";
 import { friendsApi } from "../../../api/friends";
 import { wsService } from "../../../api/websocket";
@@ -11,6 +12,8 @@ import { ChatContainer } from "../../../components/chat/ChatContainer.jsx";
 import { ChatSidebar } from "../../../components/chat/ChatSidebar.jsx";
 import { UserList } from "../../../components/chat/UserList.jsx";
 import { ImageViewer } from "../../../components/ui/ImageViewer.jsx";
+import { UnifiedSidebar } from "../../../components/chat/UnifiedSidebar.jsx";
+import { useUnifiedSidebar } from "../../../utils/useUnifiedSidebar.js";
 import { LuUserPlus, LuBan } from "@qwikest/icons/lucide";
 
 // User Menu Component
@@ -83,6 +86,9 @@ export default component$(() => {
   // Use stores
   const chat = useChatContext();
   const users = useUserContext();
+
+  // Unified sidebar
+  const unifiedSidebar = useUnifiedSidebar();
 
   const otherUserId = location.url.searchParams.get("user");
   const otherUserName = location.url.searchParams.get("name");
@@ -246,6 +252,31 @@ export default component$(() => {
           }
 
           updateChatListItem(data.data);
+          
+          // Update unified sidebar
+          if (data.data.session_id) {
+            const chat = unifiedSidebar.chats.value.find(c => c.session_id === data.data.session_id);
+            if (chat) {
+              let lastMessage = data.data.message.content;
+              if (data.data.message.type === 'image') lastMessage = 'Image';
+              else if (data.data.message.type === 'gif') lastMessage = 'GIF';
+              else if (data.data.message.type === 'audio') lastMessage = 'Voice message';
+              else if (data.data.message.caption) lastMessage = data.data.message.caption;
+
+              unifiedSidebar.chats.value = unifiedSidebar.chats.value.map(c =>
+                c.session_id === data.data.session_id
+                  ? {
+                      ...c,
+                      last_message: lastMessage,
+                      last_message_time: data.data.message.created_at,
+                      unread_count: data.data.message.sender_id === auth.user.value?.id
+                        ? c.unread_count
+                        : c.unread_count + 1,
+                    }
+                  : c
+              );
+            }
+          }
         }
 
         if (data.type === "message_read") {
@@ -260,6 +291,18 @@ export default component$(() => {
       });
 
       await loadChats();
+
+      // Load unified sidebar data
+      try {
+        const [roomsResponse, chatsResponse] = await Promise.all([
+          roomsApi.getUserRooms(),
+          chatApi.getSessions(false),
+        ]);
+        unifiedSidebar.rooms.value = roomsResponse.rooms || [];
+        unifiedSidebar.chats.value = chatsResponse.chats || [];
+      } catch (err) {
+        console.error('Failed to load unified sidebar:', err);
+      }
 
       if (otherUserId) {
         const sessionData = await chatApi.createSession(otherUserId);
@@ -444,6 +487,17 @@ export default component$(() => {
 
   return (
     <div class="fixed inset-0 top-16 flex flex-col sm:flex-row sm:gap-3 sm:p-3 bg-gray-50 sm:bg-transparent">
+      {/* Unified Sidebar */}
+      <UnifiedSidebar
+        isOpen={unifiedSidebar.isOpen.value}
+        onClose={$(() => { unifiedSidebar.isOpen.value = false; })}
+        rooms={unifiedSidebar.rooms.value}
+        chats={unifiedSidebar.chats.value}
+        currentRoomId={null}
+        currentChatId={chat.state.currentSessionId}
+        loading={false}
+      />
+
       {/* Chat Sidebar */}
       <div class={`${chat.showChatList.value ? "flex" : "hidden"} sm:flex`}>
         <ChatSidebar
@@ -491,6 +545,7 @@ export default component$(() => {
           error={chat.state.error}
           onClearError={$(() => (chat.state.error = null))}
           onClearSuccess={$(() => (chat.state.successMessage = null))}
+          onToggleUnifiedSidebar={$(() => { unifiedSidebar.isOpen.value = !unifiedSidebar.isOpen.value; })}
           headerAction={
             <button
               onClick$={(e) => {
