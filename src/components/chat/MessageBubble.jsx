@@ -1,3 +1,4 @@
+
 import { component$, useSignal, $ } from "@builder.io/qwik";
 import {
   LuCornerUpLeft,
@@ -12,7 +13,7 @@ import {
 } from "@qwikest/icons/lucide";
 import { getGenderColor, getGenderBorderColor, formatTime } from "../../utils/helpers";
 
-export const RoomMessageBubble = component$(
+export const MessageBubble = component$(
   ({
     msg,
     isOwn,
@@ -22,6 +23,7 @@ export const RoomMessageBubble = component$(
     onDeleteMessage,
     onImageClick,
     deletingMessageId,
+    accentColor = "purple", // "purple" for rooms, "pink" for DMs
   }) => {
     const hasReply = msg.reply_to_message_id && msg.reply_to_message_content;
     const isMediaMessage = ["image", "gif", "audio"].includes(msg.type);
@@ -103,7 +105,7 @@ export const RoomMessageBubble = component$(
             <div class="flex items-center gap-2 bg-gray-100 rounded-lg p-2 max-w-xs">
               <button
                 onClick$={toggleAudio}
-                class="p-2 bg-purple-600 text-white rounded-full hover:bg-purple-700 transition-colors"
+                class={`p-2 bg-${accentColor}-600 text-white rounded-full hover:bg-${accentColor}-700 transition-colors`}
               >
                 {isPlaying.value ? <LuPause class="w-4 h-4" /> : <LuPlay class="w-4 h-4" />}
               </button>
@@ -117,7 +119,7 @@ export const RoomMessageBubble = component$(
               <a
                 href={msg.content}
                 download
-                class="ml-auto p-1.5 text-gray-600 hover:text-purple-600 transition-colors"
+                class={`ml-auto p-1.5 text-gray-600 hover:text-${accentColor}-600 transition-colors`}
                 onClick$={(e) => e.stopPropagation()}
               >
                 <LuDownload class="w-4 h-4" />
@@ -129,6 +131,11 @@ export const RoomMessageBubble = component$(
       return null;
     };
 
+    const ownBorderColor = accentColor === "purple" ? "border-purple-600 text-purple-600" : "border-pink-600 text-pink-600";
+    const replyBgColor = accentColor === "purple" ? "bg-purple-50 border-purple-300" : "bg-pink-50 border-pink-300";
+    const replyIconColor = accentColor === "purple" ? "text-purple-500" : "text-pink-500";
+    const checkColor = accentColor === "purple" ? "text-purple-600" : "text-pink-600";
+
     return (
       <div key={msg.id} class="group">
         {isOwn ? (
@@ -137,9 +144,9 @@ export const RoomMessageBubble = component$(
             <div class="flex-1 min-w-0 flex flex-col items-end gap-1">
               {/* Reply Preview */}
               {hasReply && (
-                <div class="w-full max-w-[80%] sm:max-w-[65%] md:max-w-[50%] lg:max-w-[40%] xl:max-w-[30%] bg-purple-50 border-l-2 border-purple-300 rounded-r p-1.5 mb-1">
+                <div class={`w-full max-w-[80%] sm:max-w-[65%] md:max-w-[50%] lg:max-w-[40%] xl:max-w-[30%] ${replyBgColor} border-l-2 rounded-r p-1.5 mb-1`}>
                   <div class="flex items-start gap-1.5">
-                    <LuCornerUpLeft class="w-3 h-3 text-purple-500 mt-0.5 flex-shrink-0" />
+                    <LuCornerUpLeft class={`w-3 h-3 ${replyIconColor} mt-0.5 flex-shrink-0`} />
                     <div class="flex-1 min-w-0">
                       <div class="flex items-center gap-1.5 mb-0.5">
                         <div class={`text-xs font-medium ${getGenderColor(msg.reply_to_message_gender)}`}>
@@ -198,7 +205,7 @@ export const RoomMessageBubble = component$(
                 </div>
 
                 {/* Avatar on right */}
-                <div class="flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-[12px] font-semibold border-2 bg-white border-purple-600 text-purple-600 cursor-default mt-0.5">
+                <div class={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-[12px] font-semibold border-2 bg-white ${ownBorderColor} cursor-default mt-0.5`}>
                   {msg.sender_username?.charAt(0).toUpperCase()}
                 </div>
               </div>
@@ -299,7 +306,7 @@ export const RoomMessageBubble = component$(
         {/* Read indicator */}
         {isOwn && msg.is_read && (
           <div class="flex justify-end pr-2 mt-0.5">
-            <LuCheck class="w-3 h-3 text-purple-600" />
+            <LuCheck class={`w-3 h-3 ${checkColor}`} />
           </div>
         )}
       </div>

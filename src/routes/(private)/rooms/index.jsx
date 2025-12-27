@@ -1,9 +1,9 @@
 import { component$, useSignal, $ } from "@builder.io/qwik";
 import { useNavigate } from "@builder.io/qwik-city";
 import { useRoomContext } from "../../../store/room.store";
+import { ChatSidebar } from "../../../components/chat/ChatSidebar.jsx";
 import { CreateRoomModal } from "../../../components/rooms/CreateRoomModal";
 import { JoinRoomModal } from "../../../components/rooms/JoinRoomModal";
-import { RoomList } from "../../../components/rooms/RoomList";
 import { roomsApi } from "../../../api/rooms";
 import { LuHash } from "@qwikest/icons/lucide";
 
@@ -35,7 +35,7 @@ export default component$(() => {
       room.state.successMessage = "Room created successfully!";
       setTimeout(() => (room.state.successMessage = null), 3000);
 
-      // Add to room list (RoomProvider's WS handler will also add it, but this is instant)
+      // Add to room list
       if (response.room) {
         const exists = room.state.rooms.some(r => r.id === response.room.id);
         if (!exists) {
@@ -70,28 +70,23 @@ export default component$(() => {
     await nav(`/rooms/${selectedRoom.id}`);
   });
 
-  const handleSearchChange = $((query) => {
-    room.state.searchQuery = query;
-  });
-
   return (
     <div class="fixed inset-0 top-16 flex flex-col sm:flex-row sm:gap-3 sm:p-3 bg-gray-50 sm:bg-transparent">
       {/* Room List Sidebar */}
-      <div class="flex sm:flex w-full sm:w-72 lg:w-80 bg-white sm:border sm:border-gray-200 sm:rounded-lg flex-col overflow-hidden h-full">
-        <RoomList
-          rooms={room.state.rooms}
-          currentRoomId={null}
-          searchQuery={room.state.searchQuery}
-          loading={!room.state.roomsLoaded}
-          onSearchChange={handleSearchChange}
-          onRoomSelect={handleRoomSelect}
-          onCreateClick={$(() => showCreateModal.value = true)}
-          onJoinClick={$(async () => {
-            await loadPublicRooms();
-            showJoinModal.value = true;
-          })}
-        />
-      </div>
+      <ChatSidebar
+        mode="room"
+        items={room.state.rooms}
+        currentItemId={null}
+        searchQuery={room.state.searchQuery}
+        loading={!room.state.roomsLoaded}
+        onSearchChange={$((query) => (room.state.searchQuery = query))}
+        onItemSelect={handleRoomSelect}
+        onPrimaryAction={$(() => (showCreateModal.value = true))}
+        onSecondaryAction={$(async () => {
+          await loadPublicRooms();
+          showJoinModal.value = true;
+        })}
+      />
 
       {/* Main Chat Area - Empty State */}
       <div class="flex-1 bg-white sm:border sm:border-gray-200 sm:rounded-lg flex flex-col overflow-hidden h-full">
@@ -109,13 +104,13 @@ export default component$(() => {
       {/* Modals */}
       <CreateRoomModal
         isOpen={showCreateModal.value}
-        onClose={$(() => showCreateModal.value = false)}
+        onClose={$(() => (showCreateModal.value = false))}
         onSubmit={handleCreateRoom}
       />
 
       <JoinRoomModal
         isOpen={showJoinModal.value}
-        onClose={$(() => showJoinModal.value = false)}
+        onClose={$(() => (showJoinModal.value = false))}
         onJoin={handleJoinRoom}
         publicRooms={publicRooms.value}
       />

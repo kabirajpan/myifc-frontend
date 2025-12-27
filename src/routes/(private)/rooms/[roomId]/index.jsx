@@ -11,9 +11,9 @@ import {
   updateMessage
 } from "../../../../store/room.store";
 import { useAuth } from "../../../../context/auth";
-import { RoomList } from "../../../../components/rooms/RoomList";
-import { RoomChat } from "../../../../components/rooms/RoomChat";
-import { RoomMembersList } from "../../../../components/rooms/RoomMembersList";
+import { ChatSidebar } from "../../../../components/chat/ChatSidebar.jsx";
+import { ChatContainer } from "../../../../components/chat/ChatContainer.jsx";
+import { UserList } from "../../../../components/chat/UserList.jsx";
 import { ImageViewer } from "../../../../components/ui/ImageViewer";
 import { CreateRoomModal } from "../../../../components/rooms/CreateRoomModal";
 import { JoinRoomModal } from "../../../../components/rooms/JoinRoomModal";
@@ -33,19 +33,16 @@ export default component$(() => {
   const publicRooms = useSignal([]);
 
   // Computed values from cache
-  // Computed values from cache - track roomId changes
-  const cachedRoom = useComputed$(() => {
-    const id = location.params.roomId;
-    return room.state.roomsCache[id];
-  });
   const messages = useComputed$(() => {
     const id = location.params.roomId;
     return room.state.roomsCache[id]?.messages || [];
   });
+  
   const members = useComputed$(() => {
     const id = location.params.roomId;
     return room.state.roomsCache[id]?.members || [];
   });
+  
   const currentRoom = useComputed$(() => {
     const id = location.params.roomId;
     return room.state.roomsCache[id]?.room || null;
@@ -174,7 +171,7 @@ export default component$(() => {
       room.state.successMessage = "Joined room successfully!";
       setTimeout(() => (room.state.successMessage = null), 3000);
 
-      // Reload room list to include new room
+      // Reload room list
       const response = await roomsApi.getUserRooms();
       room.state.rooms = response.rooms || [];
 
@@ -193,10 +190,6 @@ export default component$(() => {
     }
 
     await nav(`/rooms/${selectedRoom.id}`);
-  });
-
-  const handleSearchChange = $((query) => {
-    room.state.searchQuery = query;
   });
 
   const handleSendMessage = $(async (data) => {
@@ -248,16 +241,14 @@ export default component$(() => {
         isOwn: true,
         sending: false
       });
+
+      room.state.successMessage = data.type === 'text' ? "Message sent!" : `${data.type.charAt(0).toUpperCase() + data.type.slice(1)} sent!`;
+      setTimeout(() => (room.state.successMessage = null), 3000);
     } catch (err) {
       // Remove failed message
       removeMessage(room.state, roomId, tempId);
       room.state.error = err.message || "Failed to send message";
     }
-  });
-
-  const handleMessageClick = $((messageId) => {
-    room.selectedMessageId.value =
-      room.selectedMessageId.value === messageId ? null : messageId;
   });
 
   const handleUsernameClick = $((message) => {
@@ -320,27 +311,10 @@ export default component$(() => {
     }
   });
 
-  const handleImageClose = $(() => {
-    room.state.imageViewer.isOpen = false;
-  });
-
-  const handleImagePrevious = $(() => {
-    if (room.state.imageViewer.currentIndex > 0) {
-      room.state.imageViewer.currentIndex--;
-    }
-  });
-
-  const handleImageNext = $(() => {
-    if (room.state.imageViewer.currentIndex < room.state.imageViewer.images.length - 1) {
-      room.state.imageViewer.currentIndex++;
-    }
-  });
-
   const handleImageReact = $(async (messageId, emoji) => {
     try {
       await roomsApi.reactToMessage(roomId, messageId, emoji);
 
-      // Find message first, then update
       const message = room.state.roomsCache[roomId]?.messages?.find(m => m.id === messageId);
       if (message) {
         updateMessage(room.state, roomId, messageId, {
@@ -394,66 +368,70 @@ export default component$(() => {
   return (
     <div class="fixed inset-0 top-16 flex flex-col sm:flex-row sm:gap-3 sm:p-3 bg-gray-50 sm:bg-transparent">
       {/* Room List Sidebar */}
-      <div class={`${room.showRoomList?.value === false ? "hidden" : "flex"} sm:flex w-full sm:w-72 lg:w-80 bg-white sm:border sm:border-gray-200 sm:rounded-lg flex-col overflow-hidden h-full`}>
-        <RoomList
-          rooms={room.state.rooms}
-          currentRoomId={roomId}
+      <div class={`${room.showRoomList?.value === false ? "hidden" : "flex"} sm:flex`}>
+        <ChatSidebar
+          mode="room"
+          items={room.state.rooms}
+          currentItemId={roomId}
           searchQuery={room.state.searchQuery}
           loading={room.state.loading && room.state.rooms.length === 0}
-          onSearchChange={handleSearchChange}
-          onRoomSelect={handleRoomSelect}
-          onCreateClick={$(() => showCreateModal.value = true)}
-          onJoinClick={$(async () => {
+          onSearchChange={$((query) => (room.state.searchQuery = query))}
+          onItemSelect={handleRoomSelect}
+          onPrimaryAction={$(() => (showCreateModal.value = true))}
+          onSecondaryAction={$(async () => {
             await loadPublicRooms();
             showJoinModal.value = true;
           })}
         />
       </div>
 
-      {/* Main Chat Area */}
-      <div class={`${room.showRoomList?.value === false ? "flex" : "hidden"} sm:flex flex-1 bg-white sm:border sm:border-gray-200 sm:rounded-lg flex-col overflow-hidden h-full`}>
-        <RoomChat
-          currentRoom={currentRoom.value}
+      {/* Main Chat Container */}
+      <div class={`${room.showRoomList?.value === false ? "flex" : "hidden"} sm:flex flex-1`}>
+        <ChatContainer
+          mode="room"
+          currentChat={currentRoom.value}
           messages={messages.value}
+          currentUserId={auth.user.value?.id}
           onBack={$(() => room.showRoomList ? room.showRoomList.value = true : null)}
-          onShowMembers={$(() => room.showMembers.value = !room.showMembers.value)}
+          onShowUsers={$(() => (room.showMembers.value = !room.showMembers.value))}
           onSendMessage={handleSendMessage}
-          onMessageClick={handleMessageClick}
+          onMessageClick={$((id) => (room.selectedMessageId.value = room.selectedMessageId.value === id ? null : id))}
           onUsernameClick={handleUsernameClick}
           onDeleteMessage={handleDeleteMessage}
           onImageClick={handleImageClick}
           selectedMessageId={room.selectedMessageId.value}
           deletingMessageId={room.state.deletingMessageId}
           replyingTo={room.state.replyingTo}
-          onCancelReply={$(() => room.state.replyingTo = null)}
+          onCancelReply={$(() => (room.state.replyingTo = null))}
           successMessage={room.state.successMessage}
           error={room.state.error}
-          onClearError={$(() => room.state.error = null)}
-          onClearSuccess={$(() => room.state.successMessage = null)}
-          currentUserId={auth.user.value?.id}
+          onClearError={$(() => (room.state.error = null))}
+          onClearSuccess={$(() => (room.state.successMessage = null))}
         />
       </div>
 
-      {/* Members List Sidebar */}
+      {/* Members List */}
       {room.showMembers.value && (
-        <RoomMembersList
+        <UserList
           isOpen={room.showMembers.value}
-          onClose={$(() => room.showMembers.value = false)}
-          members={members.value}
+          onClose={$(() => (room.showMembers.value = false))}
+          users={members.value}
           currentUserId={auth.user.value?.id}
+          mode="room"
+          title="Members"
         />
       )}
 
       {/* Modals */}
       <CreateRoomModal
         isOpen={showCreateModal.value}
-        onClose={$(() => showCreateModal.value = false)}
+        onClose={$(() => (showCreateModal.value = false))}
         onSubmit={handleCreateRoom}
       />
 
       <JoinRoomModal
         isOpen={showJoinModal.value}
-        onClose={$(() => showJoinModal.value = false)}
+        onClose={$(() => (showJoinModal.value = false))}
         onJoin={handleJoinRoom}
         publicRooms={publicRooms.value}
       />
@@ -466,14 +444,22 @@ export default component$(() => {
             : null
         }
         isOpen={room.state.imageViewer.isOpen}
-        onClose={handleImageClose}
+        onClose={$(() => (room.state.imageViewer.isOpen = false))}
         messageData={
           room.state.imageViewer.isOpen && room.state.imageViewer.images[room.state.imageViewer.currentIndex]
             ? room.state.imageViewer.images[room.state.imageViewer.currentIndex]
             : null
         }
-        onPrevious={handleImagePrevious}
-        onNext={handleImageNext}
+        onPrevious={$(() => {
+          if (room.state.imageViewer.currentIndex > 0) {
+            room.state.imageViewer.currentIndex--;
+          }
+        })}
+        onNext={$(() => {
+          if (room.state.imageViewer.currentIndex < room.state.imageViewer.images.length - 1) {
+            room.state.imageViewer.currentIndex++;
+          }
+        })}
         hasPrevious={room.state.imageViewer.currentIndex > 0}
         hasNext={room.state.imageViewer.currentIndex < room.state.imageViewer.images.length - 1}
         onReact={handleImageReact}

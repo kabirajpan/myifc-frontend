@@ -7,25 +7,23 @@ import {
     LuReply,
     LuX,
     LuHash,
-    LuCornerUpLeft,
-    LuImage,
-    LuMic,
     LuCheckCircle,
     LuAlertCircle,
     LuMessageSquare,
 } from "@qwikest/icons/lucide";
-import { RoomMessageBubble } from "./RoomMessageBubble";
+import { MessageBubble } from "./MessageBubble";
 import { EmojiPicker } from "../ui/EmojiPicker";
 import { MediaUpload, MediaPreview } from "../ui/MediaUpload";
-import { getGenderColor, formatTime } from "../../utils/helpers";
+import { getGenderColor, getGenderBorderColor, formatTime } from "../../utils/helpers";
 import { mediaApi } from "../../api/media.js";
 
-export const RoomChat = component$(
+export const ChatContainer = component$(
     ({
-        currentRoom,
+        mode = "room", // "room" | "dm"
+        currentChat, // room object or DM session object
         messages,
         onBack,
-        onShowMembers,
+        onShowUsers,
         onSendMessage,
         onMessageClick,
         onUsernameClick,
@@ -40,11 +38,25 @@ export const RoomChat = component$(
         onClearError,
         onClearSuccess,
         currentUserId,
+        // DM-specific props
+        otherUserGender, // For DM mode
+        headerAction, // Optional: custom header action button
     }) => {
         const newMessage = useSignal("");
         const showEmojiPicker = useSignal(false);
         const selectedMedia = useSignal(null);
         const messageContainerRef = useSignal(null);
+
+        const isRoom = mode === "room";
+        const accentColor = isRoom ? "purple" : "pink";
+        
+        // Header info
+        const headerTitle = isRoom ? currentChat?.name : currentChat?.other_user_name || "Chat";
+        const headerSubtitle = isRoom 
+            ? (currentChat?.description || "Room chat")
+            : "Direct message";
+        const headerIcon = isRoom ? LuHash : null;
+        const userCount = isRoom ? (currentChat?.member_count || 0) : null;
 
         const handleSendMessage = $(async () => {
             // Handle media message
@@ -99,35 +111,46 @@ export const RoomChat = component$(
                             <LuMessageSquare class="w-5 h-5 text-gray-400" />
                         </div>
                         <p class="text-xs text-gray-500">No messages yet</p>
-                        <p class="text-xs text-gray-400 mt-0.5">Be the first to say something!</p>
+                        <p class="text-xs text-gray-400 mt-0.5">
+                            {isRoom ? "Be the first to say something!" : "Start the conversation!"}
+                        </p>
                     </div>
                 );
             }
 
             return messages.map((msg) => (
-                <RoomMessageBubble
+                <MessageBubble
                     key={msg.id}
                     msg={msg}
-                    isOwn={msg.sender_id === currentUserId}
+                    isOwn={msg.sender_id === currentUserId || msg.isOwn}
                     showTime={selectedMessageId === msg.id}
                     onMessageClick={onMessageClick}
                     onUsernameClick={onUsernameClick}
                     onDeleteMessage={onDeleteMessage}
                     onImageClick={onImageClick}
                     deletingMessageId={deletingMessageId}
+                    accentColor={accentColor}
                 />
             ));
         };
 
-        if (!currentRoom) {
+        if (!currentChat) {
             return (
                 <div class="flex-1 flex items-center justify-center p-4 bg-white sm:border sm:border-gray-200 sm:rounded-lg">
                     <div class="text-center">
                         <div class="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
-                            <LuHash class="w-6 h-6 text-gray-400" />
+                            {isRoom ? (
+                                <LuHash class="w-6 h-6 text-gray-400" />
+                            ) : (
+                                <LuMessageSquare class="w-6 h-6 text-gray-400" />
+                            )}
                         </div>
-                        <h3 class="text-sm font-medium text-gray-900 mb-1">No room selected</h3>
-                        <p class="text-xs text-gray-500">Choose a room to start chatting</p>
+                        <h3 class="text-sm font-medium text-gray-900 mb-1">
+                            {isRoom ? "No room selected" : "No chat selected"}
+                        </h3>
+                        <p class="text-xs text-gray-500">
+                            {isRoom ? "Choose a room to start chatting" : "Choose a conversation to start"}
+                        </p>
                     </div>
                 </div>
             );
@@ -135,31 +158,52 @@ export const RoomChat = component$(
 
         return (
             <div class="flex-1 bg-white sm:border sm:border-gray-200 sm:rounded-lg flex flex-col overflow-hidden h-full">
-                {/* Room Header */}
+                {/* Header */}
                 <div class="flex-shrink-0 px-3 py-2.5 border-b border-gray-200 flex items-center justify-between bg-white">
                     <div class="flex items-center gap-2">
                         <button
                             onClick$={onBack}
                             class="sm:hidden p-1.5 text-gray-600 hover:bg-gray-100 rounded-lg"
-                            aria-label="Back to rooms"
+                            aria-label={isRoom ? "Back to rooms" : "Back to chats"}
                         >
                             <LuArrowLeft class="w-4 h-4" />
                         </button>
-                        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-purple-500 to-purple-700 flex items-center justify-center flex-shrink-0">
-                            <LuHash class="w-5 h-5 text-white" />
-                        </div>
+                        
+                        {isRoom ? (
+                            <div class={`w-8 h-8 rounded-lg bg-gradient-to-br from-${accentColor}-500 to-${accentColor}-700 flex items-center justify-center flex-shrink-0`}>
+                                <LuHash class="w-5 h-5 text-white" />
+                            </div>
+                        ) : (
+                            <div
+                                class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium border-2 bg-white flex-shrink-0"
+                                style={`color: ${getGenderBorderColor(otherUserGender)}; border-color: ${getGenderBorderColor(otherUserGender)};`}
+                            >
+                                {headerTitle?.charAt(0).toUpperCase()}
+                            </div>
+                        )}
+                        
                         <div>
-                            <h2 class="font-semibold text-sm text-gray-900">{currentRoom.name}</h2>
-                            <p class="text-xs text-gray-500">{currentRoom.description || "Room chat"}</p>
+                            <h2 class={`font-semibold text-sm ${
+                                isRoom ? "text-gray-900" : getGenderColor(otherUserGender)
+                            }`}>
+                                {headerTitle}
+                            </h2>
+                            <p class="text-xs text-gray-500">{headerSubtitle}</p>
                         </div>
                     </div>
-                    <button
-                        onClick$={onShowMembers}
-                        class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
-                    >
-                        <LuUsers class="w-3.5 h-3.5" />
-                        <span>{currentRoom.member_count || 0}</span>
-                    </button>
+                    
+                    <div class="flex items-center gap-2">
+                        {headerAction}
+                        {onShowUsers && (
+                            <button
+                                onClick$={onShowUsers}
+                                class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                            >
+                                <LuUsers class="w-3.5 h-3.5" />
+                                {userCount !== null && <span>{userCount}</span>}
+                            </button>
+                        )}
+                    </div>
                 </div>
 
                 {/* Error Message */}
@@ -188,9 +232,9 @@ export const RoomChat = component$(
 
                 {/* Reply Preview */}
                 {replyingTo && (
-                    <div class="flex-shrink-0 px-3 py-2 bg-purple-50 border-t border-purple-100 flex items-start justify-between">
+                    <div class={`flex-shrink-0 px-3 py-2 bg-${accentColor}-50 border-t border-${accentColor}-100 flex items-start justify-between`}>
                         <div class="flex items-start gap-2 flex-1 min-w-0">
-                            <LuReply class="w-3 h-3 text-purple-600 mt-0.5 flex-shrink-0" />
+                            <LuReply class={`w-3 h-3 text-${accentColor}-600 mt-0.5 flex-shrink-0`} />
                             <div class="flex-1 min-w-0">
                                 <div class="flex items-center gap-1.5 mb-0.5">
                                     <span class="text-xs text-gray-600">Replying to</span>
@@ -222,7 +266,7 @@ export const RoomChat = component$(
                         />
                         {selectedMedia.value.uploading && (
                             <div class="flex items-center gap-2 text-xs text-gray-600 mt-1">
-                                <div class="w-3 h-3 border-2 border-purple-600 border-t-transparent rounded-full animate-spin"></div>
+                                <div class={`w-3 h-3 border-2 border-${accentColor}-600 border-t-transparent rounded-full animate-spin`}></div>
                                 <span>Uploading...</span>
                             </div>
                         )}
@@ -238,7 +282,7 @@ export const RoomChat = component$(
                 {/* Message Input */}
                 <div class="flex-shrink-0 px-3 py-2.5 border-t border-gray-200 bg-white">
                     <div class="flex items-end gap-2">
-                        <div class="flex-1 relative flex items-end border border-gray-200 rounded-lg focus-within:ring-1 focus-within:ring-purple-500 focus-within:border-transparent">
+                        <div class={`flex-1 relative flex items-end border border-gray-200 rounded-lg focus-within:ring-1 focus-within:ring-${accentColor}-500 focus-within:border-transparent`}>
                             <textarea
                                 value={newMessage.value}
                                 onInput$={(e) => {
@@ -264,7 +308,7 @@ export const RoomChat = component$(
                             <div class="relative">
                                 <button
                                     onClick$={() => (showEmojiPicker.value = !showEmojiPicker.value)}
-                                    class="p-2 text-gray-400 hover:text-purple-600 transition-colors"
+                                    class={`p-2 text-gray-400 hover:text-${accentColor}-600 transition-colors`}
                                     aria-label="Add emoji"
                                 >
                                     <LuSmile class="w-4 h-4" />
@@ -317,7 +361,7 @@ export const RoomChat = component$(
                             disabled={
                                 selectedMedia.value?.uploading || (!selectedMedia.value && !newMessage.value?.trim())
                             }
-                            class="px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
+                            class={`px-3 py-2 bg-${accentColor}-600 text-white rounded-lg hover:bg-${accentColor}-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5`}
                         >
                             <LuSend class="w-3.5 h-3.5" />
                             <span class="text-xs font-medium hidden sm:inline">Send</span>
