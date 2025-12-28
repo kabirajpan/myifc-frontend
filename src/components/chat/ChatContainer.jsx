@@ -43,18 +43,26 @@ export const ChatContainer = component$(
         otherUserGender, // For DM mode
         headerAction, // Optional: custom header action button
         onToggleUnifiedSidebar, // NEW: Toggle unified sidebar
+
+        hasOlderMessages = false,
+        isLoadingOlder = false,
+        olderMessagesLoaded = false,
+        onLoadOlderMessages,
+        pagination,
+        messageContainerRef, // ✅ NEW: Receive ref from parent
+        onScrollToBottom, // ✅ NEW: Receive scroll function
     }) => {
         const newMessage = useSignal("");
         const showEmojiPicker = useSignal(false);
         const selectedMedia = useSignal(null);
-        const messageContainerRef = useSignal(null);
+
 
         const isRoom = mode === "room";
         const accentColor = isRoom ? "purple" : "pink";
-        
+
         // Header info
         const headerTitle = isRoom ? currentChat?.name : currentChat?.other_user_name || "Chat";
-        const headerSubtitle = isRoom 
+        const headerSubtitle = isRoom
             ? (currentChat?.description || "Room chat")
             : "Direct message";
         const headerIcon = isRoom ? LuHash : null;
@@ -120,20 +128,43 @@ export const ChatContainer = component$(
                 );
             }
 
-            return messages.map((msg) => (
-                <MessageBubble
-                    key={msg.id}
-                    msg={msg}
-                    isOwn={msg.sender_id === currentUserId || msg.isOwn}
-                    showTime={selectedMessageId === msg.id}
-                    onMessageClick={onMessageClick}
-                    onUsernameClick={onUsernameClick}
-                    onDeleteMessage={onDeleteMessage}
-                    onImageClick={onImageClick}
-                    deletingMessageId={deletingMessageId}
-                    accentColor={accentColor}
-                />
-            ));
+            return (
+                <>
+                    {messages.map((msg, index) => {
+                        // ✅ Show divider between OLD and NEW sections
+                        // Find the boundary: last OLD message (right before first NEW message)
+                        const isLastOldMessage = msg.section === 'old' &&
+                            messages[index + 1]?.section === 'new';
+
+                        return (
+                            <div key={msg.id}>
+                                <MessageBubble
+                                    msg={msg}
+                                    isOwn={msg.sender_id === currentUserId || msg.isOwn}
+                                    showTime={selectedMessageId === msg.id}
+                                    onMessageClick={onMessageClick}
+                                    onUsernameClick={onUsernameClick}
+                                    onDeleteMessage={onDeleteMessage}
+                                    onImageClick={onImageClick}
+                                    deletingMessageId={deletingMessageId}
+                                    accentColor={accentColor}
+                                />
+
+                                {/* ✅ Divider between OLD and NEW sections */}
+                                {isLastOldMessage && (
+                                    <div class="flex items-center gap-3 my-4">
+                                        <div class="flex-1 h-px bg-gradient-to-r from-transparent via-gray-300 to-transparent"></div>
+                                        <span class="text-xs text-gray-500 font-medium bg-gray-50 px-3 py-1 rounded-full border border-gray-200">
+                                            ↓ Current Messages (Latest 100)
+                                        </span>
+                                        <div class="flex-1 h-px bg-gradient-to-r from-transparent via-gray-300 to-transparent"></div>
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
+                </>
+            );
         };
 
         if (!currentChat) {
@@ -170,7 +201,7 @@ export const ChatContainer = component$(
                         >
                             <LuArrowLeft class="w-4 h-4" />
                         </button>
-                        
+
                         {isRoom ? (
                             <div class={`w-8 h-8 rounded-lg bg-gradient-to-br from-${accentColor}-500 to-${accentColor}-700 flex items-center justify-center flex-shrink-0`}>
                                 <LuHash class="w-5 h-5 text-white" />
@@ -183,17 +214,16 @@ export const ChatContainer = component$(
                                 {headerTitle?.charAt(0).toUpperCase()}
                             </div>
                         )}
-                        
+
                         <div>
-                            <h2 class={`font-semibold text-sm ${
-                                isRoom ? "text-gray-900" : getGenderColor(otherUserGender)
-                            }`}>
+                            <h2 class={`font-semibold text-sm ${isRoom ? "text-gray-900" : getGenderColor(otherUserGender)
+                                }`}>
                                 {headerTitle}
                             </h2>
                             <p class="text-xs text-gray-500">{headerSubtitle}</p>
                         </div>
                     </div>
-                    
+
                     <div class="flex items-center gap-2">
                         {headerAction}
                         {onShowUsers && (
@@ -229,6 +259,41 @@ export const ChatContainer = component$(
 
                 {/* Messages Container */}
                 <div ref={messageContainerRef} class="flex-1 overflow-y-auto p-3 space-y-1">
+                    {/* ✅ Load Old Messages Button */}
+                    {hasOlderMessages && !olderMessagesLoaded && (
+                        <div class="flex flex-col items-center gap-2 mb-3">
+                            <button
+                                onClick$={onLoadOlderMessages}
+                                disabled={isLoadingOlder}
+                                class={`px-4 py-2 text-xs font-medium rounded-lg transition-colors ${isLoadingOlder
+                                        ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                                        : `bg-${accentColor}-50 text-${accentColor}-700 hover:bg-${accentColor}-100 border border-${accentColor}-200`
+                                    }`}
+                            >
+                                {isLoadingOlder ? (
+                                    <div class="flex items-center gap-2">
+                                        <div class={`w-3 h-3 border-2 border-${accentColor}-600 border-t-transparent rounded-full animate-spin`}></div>
+                                        <span>Loading old messages...</span>
+                                    </div>
+                                ) : (
+                                    `⬆️ Load Old Messages (${pagination.value?.oldMessageCount || 0})`
+                                )}
+                            </button>
+                            <p class="text-xs text-gray-500">
+                                {pagination.value?.oldMessageCount || 0} older messages available
+                            </p>
+                        </div>
+                    )}
+
+                    {/* ✅ Old Messages Loaded Indicator */}
+                    {olderMessagesLoaded && (
+                        <div class="flex justify-center mb-3">
+                            <div class="px-3 py-1.5 text-xs text-gray-500 bg-gray-50 rounded-full border border-gray-200">
+                                📜 All {pagination.value?.totalCount || 0} messages loaded
+                            </div>
+                        </div>
+                    )}
+
                     {renderMessages()}
                 </div>
 

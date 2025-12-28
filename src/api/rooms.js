@@ -55,14 +55,30 @@ export const roomsApi = {
       { requiresAuth: true }
     );
   },
-
-  // Get room messages
-  getMessages: async (roomId, limit = 100) => {
+  // Get message count for pagination
+  getMessageCount: async (roomId) => {
     return await api.get(
-      `${API_CONFIG.ENDPOINTS.GET_ROOM_MESSAGES}/${roomId}/messages?limit=${limit}`,
+      `${API_CONFIG.ENDPOINTS.GET_ROOM_MESSAGES}/${roomId}/messages/count`,
       { requiresAuth: true }
     );
   },
+
+  // Get room messages with pagination support
+  getMessages: async (roomId, limit = 100, offset = 0) => {
+    return await api.get(
+      `${API_CONFIG.ENDPOINTS.GET_ROOM_MESSAGES}/${roomId}/messages?limit=${limit}&offset=${offset}`,
+      { requiresAuth: true }
+    );
+  },
+
+  // Get new messages after timestamp (for cache updates)
+  getNewMessages: async (roomId, afterTimestamp) => {
+    return await api.get(
+      `${API_CONFIG.ENDPOINTS.GET_ROOM_MESSAGES}/${roomId}/messages?after_timestamp=${afterTimestamp}`,
+      { requiresAuth: true }
+    );
+  },
+
 
   // Get room members
   getMembers: async (roomId) => {

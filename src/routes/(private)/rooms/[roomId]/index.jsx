@@ -6,9 +6,13 @@ import {
   isCacheStale,
   setCachedRoom,
   updateRoomInList,
+  addMessageToNew,
   addMessage,
   removeMessage,
-  updateMessage
+  updateMessage,
+  updatePagination,
+  setOldMessages,
+  prependOldMessages
 } from "../../../../store/room.store";
 import { useAuth } from "../../../../context/auth";
 import { ChatSidebar } from "../../../../components/chat/ChatSidebar.jsx";
@@ -39,30 +43,49 @@ export default component$(() => {
   const showJoinModal = useSignal(false);
   const publicRooms = useSignal([]);
 
-  // Computed values from cache
+  const messageContainerRef = useSignal(null);
+
+  // ✅ UPDATED: Combine OLD + NEW messages for display
   const messages = useComputed$(() => {
     const id = location.params.roomId;
-    return room.state.roomsCache[id]?.messages || [];
+    const cache = room.state.roomsCache[id];
+
+    if (!cache) return [];
+
+    const oldMessages = cache.oldMessages || [];
+    const newMessages = cache.messages || [];
+
+    // Combine: OLD messages first, then NEW messages
+    return [...oldMessages, ...newMessages];
   });
-  
+
   const members = useComputed$(() => {
     const id = location.params.roomId;
     return room.state.roomsCache[id]?.members || [];
   });
-  
+
   const currentRoom = useComputed$(() => {
     const id = location.params.roomId;
     return room.state.roomsCache[id]?.room || null;
   });
 
-  // Load room data (with smart caching)
+  const pagination = useComputed$(() => {
+    const id = location.params.roomId;
+    return room.state.roomsCache[id]?.pagination || {
+      hasOldMessages: false,
+      oldMessageCount: 0,
+      oldMessagesLoaded: false,
+      isLoadingOld: false,
+      totalCount: 0,
+    };
+  });
+
   const loadRoomData = $(async (id) => {
     try {
       console.log('🔄 Loading room:', id);
       room.state.loading = true;
       room.state.activeRoomId = id;
 
-      // Check cache first
       const cached = getCachedRoom(room.state, id);
       const isStale = isCacheStale(room.state, id);
 
@@ -74,30 +97,75 @@ export default component$(() => {
 
       console.log('📡 Fetching fresh data for room:', id);
 
-      // Load in parallel
-      const [roomResponse, messagesResponse, membersResponse] = await Promise.all([
+      // Get total message count
+      const countResponse = await roomsApi.getMessageCount(id);
+      const totalCount = countResponse.count || 0;
+      console.log(`📊 Room has ${totalCount} total messages`);
+
+      let newMessagesToLoad;
+      let offset;
+      let hasOldMessages;
+      let oldMessageCount;
+
+      if (totalCount === 0) {
+        // No messages
+        newMessagesToLoad = 0;
+        offset = 0;
+        hasOldMessages = false;
+        oldMessageCount = 0;
+        console.log('📭 No messages in room');
+      } else if (totalCount <= 100) {
+        // Total ≤ 100: All are NEW, no OLD
+        newMessagesToLoad = totalCount;
+        offset = 0;
+        hasOldMessages = false;
+        oldMessageCount = 0;
+        console.log(`📥 Loading all ${totalCount} messages as NEW (no OLD messages)`);
+      } else {
+        // Total > 100: Load messages AFTER the first 100 as NEW
+        // Example: 150 total → Load messages 101-150 (50 messages)
+        newMessagesToLoad = totalCount - 100;
+        offset = 0; // offset=0 gives newest messages in DESC order
+        hasOldMessages = true;
+        oldMessageCount = 100; // First 100 messages are OLD
+        console.log(`📥 Loading ${newMessagesToLoad} NEW messages (messages ${101}-${totalCount})`);
+        console.log(`📦 ${oldMessageCount} OLD messages available (messages 1-100)`);
+      }
+
+      // Fetch room details and NEW messages
+      const [roomResponse, messagesResponse] = await Promise.all([
         roomsApi.getRoom(id),
-        roomsApi.getMessages(id),
-        roomsApi.getMembers(id)
+        newMessagesToLoad > 0
+          ? roomsApi.getMessages(id, newMessagesToLoad, offset)
+          : Promise.resolve({ messages: [] })
       ]);
 
-      // Map messages with ownership
-      const mappedMessages = (messagesResponse.messages || []).map(msg => ({
+      // Map NEW messages with ownership
+      const newMessages = (messagesResponse.messages || []).map(msg => ({
         ...msg,
         isOwn: msg.sender_id === auth.user.value?.id,
+        section: 'new', // ✅ Mark as NEW
       }));
 
-      // Update cache
+      console.log(`✅ Loaded ${newMessages.length} NEW messages`);
+
+      // Cache the data (OLD messages empty initially)
       setCachedRoom(room.state, id, {
         room: roomResponse.room,
-        messages: mappedMessages,
-        members: membersResponse.members || [],
+        messages: newMessages,      // NEW section (messages 101+)
+        oldMessages: [],            // OLD section (empty, load on demand)
+        members: [],
         hasJoined: true,
+        pagination: {
+          hasOldMessages: hasOldMessages,
+          oldMessageCount: oldMessageCount,
+          oldMessagesLoaded: false,
+          isLoadingOld: false,
+          totalCount: totalCount,
+        }
       });
 
-      // Reset unread count for this room
       updateRoomInList(room.state, id, { unread_count: 0 });
-
       room.state.loading = false;
       console.log('✅ Room data loaded and cached');
 
@@ -106,6 +174,152 @@ export default component$(() => {
       room.state.error = err.message || "Failed to load room";
       room.state.loading = false;
       setTimeout(() => nav("/rooms"), 2000);
+    }
+  });
+
+
+  // ✅ PHASE 1: Lazy load members (only when needed)
+  const loadMembers = $(async (id) => {
+    try {
+      const cached = getCachedRoom(room.state, id);
+
+      // If already loaded, skip
+      if (cached?.members && cached.members.length > 0) {
+        console.log('✅ Members already loaded');
+        return;
+      }
+
+      console.log('📥 Loading members...');
+      const membersResponse = await roomsApi.getMembers(id);
+
+      // Update cache with members
+      if (room.state.roomsCache[id]) {
+        room.state.roomsCache[id].members = membersResponse.members || [];
+        console.log(`✅ Loaded ${membersResponse.members?.length || 0} members`);
+      }
+    } catch (err) {
+      console.error('❌ Error loading members:', err);
+      room.state.error = err.message || "Failed to load members";
+    }
+  });
+
+  // ✅ PHASE 2: Check for new messages and update cache incrementally
+  const checkForNewMessages = $(async (id) => {
+    try {
+      const cached = getCachedRoom(room.state, id);
+
+      if (!cached || !cached.lastFetch) {
+        console.log('⚠️ No cache, skipping incremental update');
+        return;
+      }
+
+      console.log('🔄 Checking for new messages...');
+
+      // Get messages after last fetch timestamp
+      const response = await roomsApi.getNewMessages(id, cached.lastFetch);
+
+      if (response.messages && response.messages.length > 0) {
+        console.log(`📥 Found ${response.messages.length} new messages`);
+
+        // Map messages with ownership
+        const newMessages = response.messages.map(msg => ({
+          ...msg,
+          isOwn: msg.sender_id === auth.user.value?.id,
+        }));
+
+        // Append new messages to cache
+        newMessages.forEach(msg => {
+          addMessage(room.state, id, msg);
+        });
+
+        // Update last fetch time
+        if (room.state.roomsCache[id]) {
+          room.state.roomsCache[id].lastFetch = Date.now();
+        }
+
+        console.log('✅ Cache updated with new messages');
+      } else {
+        console.log('✅ No new messages');
+      }
+    } catch (err) {
+      console.error('❌ Error checking for new messages:', err);
+      // Don't show error to user, just log it
+    }
+  });
+
+  // ✅ FIXED: Load OLD messages (first 100 messages)
+  const loadOlderMessages = $(async () => {
+    if (!roomId) return;
+
+    const cached = getCachedRoom(room.state, roomId);
+    const paginationState = pagination.value;
+
+    if (!paginationState.hasOldMessages ||
+      paginationState.isLoadingOld ||
+      paginationState.oldMessagesLoaded) {
+      console.log('⚠️ No OLD messages to load or already loaded');
+      return;
+    }
+
+    try {
+      console.log('📥 Loading OLD messages...');
+
+      const totalCount = paginationState.totalCount || 0;
+      const oldCount = paginationState.oldMessageCount || 100;
+
+      if (oldCount === 0 || totalCount <= 100) {
+        console.log('✅ No OLD messages available');
+        updatePagination(room.state, roomId, {
+          oldMessagesLoaded: true,
+        });
+        return;
+      }
+
+      // ✅ CRITICAL FIX: Calculate correct offset
+      // Backend returns DESC (newest first)
+      // To get OLDEST 100 messages (1-100), we need to skip the newest ones
+      // Example: 150 total → skip 50 newest (101-150), get next 100 (1-100)
+      const newMessagesCount = totalCount - 100; // How many NEW messages we loaded initially
+      const offset = newMessagesCount; // Skip the NEW messages to get OLD ones
+
+      console.log(`📊 Total: ${totalCount}, NEW: ${newMessagesCount}, Loading OLD: ${oldCount} (offset: ${offset})`);
+
+      // Save scroll position
+      const container = messageContainerRef.value;
+      const oldScrollHeight = container?.scrollHeight || 0;
+
+      updatePagination(room.state, roomId, { isLoadingOld: true });
+
+      // ✅ Fetch OLD messages
+      const response = await roomsApi.getMessages(roomId, oldCount, offset);
+
+      // Map OLD messages
+      const oldMessages = (response.messages || []).map(msg => ({
+        ...msg,
+        isOwn: msg.sender_id === auth.user.value?.id,
+        section: 'old', // ✅ Mark as OLD
+      }));
+
+      console.log(`✅ Loaded ${oldMessages.length} OLD messages`);
+
+      // Store OLD messages separately
+      setOldMessages(room.state, roomId, oldMessages);
+
+      console.log(`📊 OLD section: ${oldMessages.length} messages loaded`);
+
+      // Restore scroll position (prevent jumping to top)
+      setTimeout(() => {
+        if (container) {
+          const newScrollHeight = container.scrollHeight;
+          const heightDifference = newScrollHeight - oldScrollHeight;
+          container.scrollTop = heightDifference;
+        }
+      }, 50);
+
+    } catch (err) {
+      console.error('❌ Error loading OLD messages:', err);
+      room.state.error = err.message || "Failed to load OLD messages";
+      updatePagination(room.state, roomId, { isLoadingOld: false });
     }
   });
 
@@ -119,7 +333,16 @@ export default component$(() => {
     }
   });
 
-  // Initialize room
+  // Add a ref for message container
+  // const messageContainerRef = useSignal(null);
+
+  // Add this function to scroll to bottom
+  const scrollToBottom = $(() => {
+    if (messageContainerRef.value) {
+      messageContainerRef.value.scrollTop = messageContainerRef.value.scrollHeight;
+    }
+  });
+
   useVisibleTask$(async ({ track, cleanup }) => {
     const currentRoomId = track(() => location.params.roomId);
 
@@ -131,6 +354,7 @@ export default component$(() => {
     }
 
     console.log('🎯 Room changed to:', currentRoomId);
+    room.state.loading = true;
 
     // Reset UI state
     room.state.error = null;
@@ -150,8 +374,189 @@ export default component$(() => {
       console.error('Failed to load unified sidebar:', err);
     }
 
-    // Load room data (uses cache if available)
-    await loadRoomData(currentRoomId);
+    // Load room data
+    const cached = getCachedRoom(room.state, currentRoomId);
+    const isStale = isCacheStale(room.state, currentRoomId);
+
+    if (cached && !isStale) {
+      console.log('✅ Using cached data, checking for updates...');
+      room.state.loading = false;
+      room.state.activeRoomId = currentRoomId;
+      await checkForNewMessages(currentRoomId);
+
+      // ✅ Scroll to bottom after data loads
+      setTimeout(() => scrollToBottom(), 100);
+    } else if (cached && isStale) {
+      console.log('⚠️ Cache stale, showing cached data and updating...');
+      room.state.loading = false;
+      room.state.activeRoomId = currentRoomId;
+      await checkForNewMessages(currentRoomId);
+
+      const updatedCache = getCachedRoom(room.state, currentRoomId);
+      if (!updatedCache || updatedCache.messages.length < 10) {
+        console.log('🔄 Incremental update insufficient, doing full reload...');
+        await loadRoomData(currentRoomId);
+      }
+
+      // ✅ Scroll to bottom after data loads
+      setTimeout(() => scrollToBottom(), 100);
+    } else {
+      console.log('📡 No cache, loading room data...');
+      await loadRoomData(currentRoomId);
+
+      // ✅ Scroll to bottom after data loads
+      setTimeout(() => scrollToBottom(), 100);
+    }
+
+    room.state.loading = false;
+
+    // ✅ NEW: WebSocket handler for ROOM MESSAGES (this is what you were missing!)
+    const handleRoomMessages = $((data) => {
+      console.log('📡 [ROOM WS] Message received:', data);
+
+      // Handle new messages
+      if (data.type === "new_message") {
+        const msgRoomId = data.data?.room_id;
+        const newMsg = data.data?.message;
+
+        if (msgRoomId === currentRoomId && newMsg) {
+          console.log('📥 [ROOM WS] Adding new message:', newMsg.id);
+
+          // Check if message already exists (avoid duplicates)
+          const cached = getCachedRoom(room.state, currentRoomId);
+          const exists = cached?.messages?.some(m => m.id === newMsg.id);
+
+          if (!exists) {
+            const mappedMsg = {
+              ...newMsg,
+              isOwn: newMsg.sender_id === auth.user.value?.id,
+              section: 'new', // ✅ Add section marker
+            };
+
+            // ✅ Use new function (handles 100-message shift automatically)
+            addMessageToNew(room.state, currentRoomId, mappedMsg);
+            console.log('✅ [ROOM WS] Message added to cache');
+
+            // ✅ Update image viewer if it's built and message is media
+            if (room.state.imageViewer.isBuilt && (newMsg.type === 'image' || newMsg.type === 'gif')) {
+              room.state.imageViewer.images = [
+                ...room.state.imageViewer.images,
+                {
+                  id: newMsg.id,
+                  url: newMsg.content,
+                  sender_username: newMsg.sender_username,
+                  sender_gender: newMsg.sender_gender,
+                  caption: newMsg.caption,
+                  created_at: newMsg.created_at,
+                  reactions: newMsg.reactions || [],
+                }
+              ];
+            }
+          } else {
+            console.log('⚠️ [ROOM WS] Message already exists, skipping');
+          }
+        }
+      }
+
+      // Handle message deletion
+      if (data.type === "message_deleted") {
+        const msgRoomId = data.data?.room_id;
+        const messageId = data.data?.message_id;
+
+        if (msgRoomId === currentRoomId && messageId) {
+          console.log('🗑️ [ROOM WS] Removing deleted message:', messageId);
+          removeMessage(room.state, currentRoomId, messageId);
+
+          // Remove from image viewer if exists
+          if (room.state.imageViewer.isBuilt) {
+            room.state.imageViewer.images = room.state.imageViewer.images.filter(
+              img => img.id !== messageId
+            );
+          }
+        }
+      }
+
+      // Handle reactions
+      if (data.type === "message_reacted") {
+        const msgRoomId = data.data?.room_id;
+        const messageId = data.data?.message_id;
+        const reaction = data.data?.reaction;
+
+        if (msgRoomId === currentRoomId && messageId && reaction) {
+          console.log('❤️ [ROOM WS] Reaction added:', reaction);
+          const cached = getCachedRoom(room.state, currentRoomId);
+          const message = cached?.messages?.find(m => m.id === messageId);
+
+          if (message) {
+            // Check if reaction already exists
+            const reactionExists = message.reactions?.some(r => r.id === reaction.id);
+            if (!reactionExists) {
+              updateMessage(room.state, currentRoomId, messageId, {
+                reactions: [...(message.reactions || []), reaction]
+              });
+
+              // Update image viewer if message is in viewer
+              if (room.state.imageViewer.isBuilt) {
+                const imgIndex = room.state.imageViewer.images.findIndex(img => img.id === messageId);
+                if (imgIndex !== -1) {
+                  room.state.imageViewer.images[imgIndex] = {
+                    ...room.state.imageViewer.images[imgIndex],
+                    reactions: [...(room.state.imageViewer.images[imgIndex].reactions || []), reaction]
+                  };
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Handle reaction removal
+      if (data.type === "reaction_removed") {
+        const msgRoomId = data.data?.room_id;
+        const messageId = data.data?.message_id;
+        const reactionId = data.data?.reaction_id;
+
+        if (msgRoomId === currentRoomId && messageId && reactionId) {
+          console.log('🗑️ [ROOM WS] Reaction removed:', reactionId);
+          const cached = getCachedRoom(room.state, currentRoomId);
+          const message = cached?.messages?.find(m => m.id === messageId);
+
+          if (message) {
+            updateMessage(room.state, currentRoomId, messageId, {
+              reactions: (message.reactions || []).filter(r => r.id !== reactionId)
+            });
+
+            // Update image viewer if message is in viewer
+            if (room.state.imageViewer.isBuilt) {
+              const imgIndex = room.state.imageViewer.images.findIndex(img => img.id === messageId);
+              if (imgIndex !== -1) {
+                room.state.imageViewer.images[imgIndex] = {
+                  ...room.state.imageViewer.images[imgIndex],
+                  reactions: room.state.imageViewer.images[imgIndex].reactions.filter(r => r.id !== reactionId)
+                };
+              }
+            }
+          }
+        }
+      }
+
+      // Handle member updates
+      if (data.type === "room_presence") {
+        const msgRoomId = data.data?.room_id;
+
+        if (msgRoomId === currentRoomId) {
+          console.log('👥 [ROOM WS] Member presence changed, reloading members...');
+          // Only reload members if they're currently visible
+          if (room.showMembers.value) {
+            loadMembers(currentRoomId);
+          }
+        }
+      }
+    });
+
+    // ✅ Subscribe to WebSocket for room messages
+    wsService.connect();
+    const unsubscribeRoomMessages = wsService.onMessage(handleRoomMessages);
 
     // Setup WebSocket listener for unified sidebar
     const unsubscribeWs = wsService.onMessage((data) => {
@@ -167,13 +572,13 @@ export default component$(() => {
           unifiedSidebar.rooms.value = unifiedSidebar.rooms.value.map(r =>
             r.id === data.data.room_id
               ? {
-                  ...r,
-                  last_message: lastMessage,
-                  last_message_time: data.data.message.created_at,
-                  unread_count: data.data.message.sender_id === auth.user.value?.id
-                    ? r.unread_count
-                    : r.unread_count + 1,
-                }
+                ...r,
+                last_message: lastMessage,
+                last_message_time: data.data.message.created_at,
+                unread_count: data.data.message.sender_id === auth.user.value?.id
+                  ? r.unread_count
+                  : r.unread_count + 1,
+              }
               : r
           );
         }
@@ -184,6 +589,7 @@ export default component$(() => {
     cleanup(() => {
       console.log('🧹 Room cleanup:', currentRoomId);
       room.state.activeRoomId = null;
+      unsubscribeRoomMessages(); // ✅ IMPORTANT: Unsubscribe room messages
       unsubscribeWs();
     });
   });
@@ -203,10 +609,10 @@ export default component$(() => {
         if (!exists) {
           room.state.rooms = [...room.state.rooms, response.room];
         }
-        
+
         // Update unified sidebar rooms list
         unifiedSidebar.rooms.value = [...unifiedSidebar.rooms.value, response.room];
-        
+
         await nav(`/rooms/${response.room.id}`);
       }
     } catch (err) {
@@ -262,6 +668,8 @@ export default component$(() => {
       isOwn: true,
       is_read: false,
       sending: true,
+      section: 'new', // ✅ NEW: Mark as NEW section
+      reactions: [],
       reply_to_message_id: room.state.replyingTo?.id || null,
       ...(room.state.replyingTo && {
         reply_to_message_content: room.state.replyingTo.content,
@@ -273,8 +681,9 @@ export default component$(() => {
       }),
     };
 
-    // Add optimistically
-    addMessage(room.state, roomId, tempMessage);
+    // ✅ Add optimistically (user sees it immediately)
+    addMessageToNew(room.state, roomId, tempMessage);
+    console.log('✅ [SEND] Temp message added:', tempId);
 
     const replyId = room.state.replyingTo?.id || null;
     room.state.replyingTo = null;
@@ -289,17 +698,41 @@ export default component$(() => {
         data.caption
       );
 
-      // Update with real message
-      updateMessage(room.state, roomId, tempId, {
-        ...response.message,
+      console.log('✅ [SEND] API response:', response);
+
+      // ✅ Replace temp message with real message from API
+      const realMessage = {
+        ...response.data,
         isOwn: true,
-        sending: false
-      });
+        sending: false,
+        section: 'new', // ✅ NEW: Mark as NEW section
+        reactions: []
+      };
+
+      updateMessage(room.state, roomId, tempId, realMessage);
+      console.log('✅ [SEND] Temp message replaced with real:', realMessage.id);
+
+      // ✅ Update image viewer if it's a media message
+      if (room.state.imageViewer.isBuilt && (data.type === 'image' || data.type === 'gif')) {
+        room.state.imageViewer.images = [
+          ...room.state.imageViewer.images,
+          {
+            id: realMessage.id,
+            url: realMessage.content,
+            sender_username: realMessage.sender_username,
+            sender_gender: realMessage.sender_gender,
+            caption: realMessage.caption,
+            created_at: realMessage.created_at,
+            reactions: [],
+          }
+        ];
+      }
 
       room.state.successMessage = data.type === 'text' ? "Message sent!" : `${data.type.charAt(0).toUpperCase() + data.type.slice(1)} sent!`;
       setTimeout(() => (room.state.successMessage = null), 3000);
     } catch (err) {
-      // Remove failed message
+      console.error('❌ [SEND] Failed:', err);
+      // ✅ Remove failed message
       removeMessage(room.state, roomId, tempId);
       room.state.error = err.message || "Failed to send message";
     }
@@ -458,7 +891,12 @@ export default component$(() => {
           messages={messages.value}
           currentUserId={auth.user.value?.id}
           onBack={$(() => room.showRoomList ? room.showRoomList.value = true : null)}
-          onShowUsers={$(() => (room.showMembers.value = !room.showMembers.value))}
+          onShowUsers={$(async () => {
+            if (!room.showMembers.value) {
+              await loadMembers(roomId);
+            }
+            room.showMembers.value = !room.showMembers.value;
+          })}
           onSendMessage={handleSendMessage}
           onMessageClick={$((id) => (room.selectedMessageId.value = room.selectedMessageId.value === id ? null : id))}
           onUsernameClick={handleUsernameClick}
@@ -472,7 +910,14 @@ export default component$(() => {
           error={room.state.error}
           onClearError={$(() => (room.state.error = null))}
           onClearSuccess={$(() => (room.state.successMessage = null))}
+          hasOlderMessages={pagination.value.hasOldMessages}
+          isLoadingOlder={pagination.value.isLoadingOld}  // ✅ CHANGED: isLoadingOlder → isLoadingOld
+          olderMessagesLoaded={pagination.value.oldMessagesLoaded}
+          onLoadOlderMessages={loadOlderMessages}
+          pagination={pagination.value}  // ✅ NEW: Pass full pagination object
           onToggleUnifiedSidebar={$(() => { unifiedSidebar.isOpen.value = !unifiedSidebar.isOpen.value; })}
+          messageContainerRef={messageContainerRef}
+          onScrollToBottom={scrollToBottom}
         />
       </div>
 
