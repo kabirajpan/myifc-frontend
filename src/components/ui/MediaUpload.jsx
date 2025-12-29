@@ -32,6 +32,13 @@ export const MediaUpload = component$(({ onMediaSelect }) => {
     
     if (!file) return;
 
+    console.log('File selected:', {
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      mediaType: type
+    });
+
     // Validate file
     const validation = await validateFile(file, type);
     if (!validation.valid) {
@@ -43,22 +50,27 @@ export const MediaUpload = component$(({ onMediaSelect }) => {
     if (type === 'image' || type === 'gif') {
       const reader = new FileReader();
       reader.onload = (e) => {
-        // NOW notify parent with the loaded preview
+        console.log('FileReader finished, calling onMediaSelect');
+        // NOW notify parent with the loaded preview AND the file
         if (onMediaSelect) {
           onMediaSelect({
-            file,
-            type,
+            file: file, // Make sure we're passing the actual file object
+            type: type,
             preview: e.target.result
           });
         }
+      };
+      reader.onerror = (error) => {
+        console.error('FileReader error:', error);
+        alert('Failed to read file');
       };
       reader.readAsDataURL(file);
     } else {
       // For audio, notify immediately (no preview needed)
       if (onMediaSelect) {
         onMediaSelect({
-          file,
-          type,
+          file: file,
+          type: type,
           preview: null
         });
       }

@@ -228,48 +228,46 @@ export const MessageBubble = component$(
                   </div>
                 )}
 
-                {/* Quick reaction buttons for media */}
-                {!isOwn && (
-                  <div class="flex gap-1 mt-1 pointer-events-auto">
-                    {['❤️', '👍', '😂', '😮', '😢'].map(emoji => {
-                      const existingReaction = (msg.reactions || []).find(
-                        r => r.emoji === emoji && r.user_id === currentUserId
-                      );
+                {/* Quick reaction buttons for media - Show for all users */}
+                <div class="flex gap-1 mt-1 pointer-events-auto">
+                  {['❤️', '👍', '😂', '😮', '😢'].map(emoji => {
+                    const existingReaction = (msg.reactions || []).find(
+                      r => r.emoji === emoji && r.user_id === currentUserId
+                    );
 
-                      return (
-                        <button
-                          key={emoji}
-                          onClick$={() => {
-                            if (existingReaction) {
-                              onRemoveReaction(msg.id, existingReaction.id);
-                            } else {
-                              onReactToMessage(msg.id, emoji);
-                            }
-                          }}
-                          class={`w-6 h-6 flex items-center justify-center rounded transition-colors text-sm ${existingReaction
-                            ? `bg-${accentColor}-100 border border-${accentColor}-300`
-                            : 'hover:bg-gray-100'
-                            }`}
-                          title={`React with ${emoji}`}
-                        >
-                          {emoji}
-                        </button>
-                      );
-                    })}
-                    <button
-                      onClick$={(e) => {
-                        e.stopPropagation();
-                        if (onOpenReactionPicker) {
-                          onOpenReactionPicker(msg.id);
-                        }
-                      }}
-                      class="w-6 h-6 flex items-center justify-center hover:bg-gray-100 rounded transition-colors text-gray-500 border border-gray-300"
-                      title="More reactions"
-                    >
-                      <LuPlus class="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                )}
+                    return (
+                      <button
+                        key={emoji}
+                        onClick$={() => {
+                          if (existingReaction) {
+                            onRemoveReaction(msg.id, existingReaction.id);
+                          } else {
+                            onReactToMessage(msg.id, emoji);
+                          }
+                        }}
+                        class={`w-6 h-6 flex items-center justify-center rounded transition-colors text-sm ${existingReaction
+                          ? `bg-${accentColor}-100 border border-${accentColor}-300`
+                          : 'hover:bg-gray-100 border border-gray-200'
+                          }`}
+                        title={`React with ${emoji}`}
+                      >
+                        {emoji}
+                      </button>
+                    );
+                  })}
+                  <button
+                    onClick$={(e) => {
+                      e.stopPropagation();
+                      if (onOpenReactionPicker) {
+                        onOpenReactionPicker(msg.id);
+                      }
+                    }}
+                    class="w-6 h-6 flex items-center justify-center hover:bg-gray-100 rounded transition-colors text-gray-500 border border-gray-300"
+                    title="More reactions"
+                  >
+                    <LuPlus class="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -302,6 +300,84 @@ export const MessageBubble = component$(
               >
                 <LuDownload class="w-4 h-4" />
               </a>
+            </div>
+
+            {/* Reactions below audio */}
+            {msg.reactions && msg.reactions.length > 0 && (
+              <div class="flex flex-wrap gap-1 mt-1 pointer-events-auto">
+                {Object.entries(
+                  msg.reactions.reduce((acc, reaction) => {
+                    if (!acc[reaction.emoji]) acc[reaction.emoji] = [];
+                    acc[reaction.emoji].push(reaction);
+                    return acc;
+                  }, {})
+                ).map(([emoji, reactions]) => {
+                  const userReaction = reactions.find(r => r.user_id === currentUserId);
+                  const hasUserReacted = !!userReaction;
+
+                  return (
+                    <button
+                      key={emoji}
+                      onClick$={() => {
+                        if (hasUserReacted) {
+                          onRemoveReaction(msg.id, userReaction.id);
+                        } else {
+                          onReactToMessage(msg.id, emoji);
+                        }
+                      }}
+                      class={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs transition-all ${hasUserReacted
+                        ? `bg-${accentColor}-100 border border-${accentColor}-300 text-${accentColor}-700`
+                        : 'bg-gray-100 border border-gray-200 text-gray-700 hover:bg-gray-200'
+                        }`}
+                      title={reactions.map(r => r.username || 'User').join(', ')}
+                    >
+                      <span>{emoji}</span>
+                      <span class="font-medium">{reactions.length}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Quick reaction buttons for audio - Show for all users */}
+            <div class="flex gap-1 mt-1 pointer-events-auto">
+              {['❤️', '👍', '😂', '😮', '😢'].map(emoji => {
+                const existingReaction = (msg.reactions || []).find(
+                  r => r.emoji === emoji && r.user_id === currentUserId
+                );
+
+                return (
+                  <button
+                    key={emoji}
+                    onClick$={() => {
+                      if (existingReaction) {
+                        onRemoveReaction(msg.id, existingReaction.id);
+                      } else {
+                        onReactToMessage(msg.id, emoji);
+                      }
+                    }}
+                    class={`w-6 h-6 flex items-center justify-center rounded transition-colors text-sm ${existingReaction
+                      ? `bg-${accentColor}-100 border border-${accentColor}-300`
+                      : 'hover:bg-gray-100 border border-gray-200'
+                      }`}
+                    title={`React with ${emoji}`}
+                  >
+                    {emoji}
+                  </button>
+                );
+              })}
+              <button
+                onClick$={(e) => {
+                  e.stopPropagation();
+                  if (onOpenReactionPicker) {
+                    onOpenReactionPicker(msg.id);
+                  }
+                }}
+                class="w-6 h-6 flex items-center justify-center hover:bg-gray-100 rounded transition-colors text-gray-500 border border-gray-300"
+                title="More reactions"
+              >
+                <LuPlus class="w-3.5 h-3.5" />
+              </button>
             </div>
           </div>
         );
@@ -387,7 +463,7 @@ export const MessageBubble = component$(
                   <button
                     ref={avatarRef}
                     onClick$={handleAvatarClick}
-                    class={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-[12px] font-semibold border-2 bg-white ${ownBorderColor} cursor-pointer transition-all mt-0.5 ${showContextMenu.value
+                    class={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[12px] font-semibold border-2 bg-white ${ownBorderColor} cursor-pointer transition-all mt-0.5 ${showContextMenu.value
                         ? `ring-2 ring-offset-1 ring-${accentColor}-500 shadow-lg`
                         : `hover:ring-2 hover:ring-offset-1 hover:ring-${accentColor}-300`
                       }`}
@@ -444,7 +520,7 @@ export const MessageBubble = component$(
                   <button
                     ref={avatarRef}
                     onClick$={handleAvatarClick}
-                    class={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-[12px] font-semibold border-2 bg-white mt-0.5 cursor-pointer transition-all ${showContextMenu.value
+                    class={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[12px] font-semibold border-2 bg-white mt-0.5 cursor-pointer transition-all ${showContextMenu.value
                         ? 'ring-2 ring-offset-1'
                         : 'hover:ring-2 hover:ring-offset-1'
                       }`}
