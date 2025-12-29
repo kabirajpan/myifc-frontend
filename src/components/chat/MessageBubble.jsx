@@ -1,5 +1,4 @@
-
-import { component$, useSignal, $ } from "@builder.io/qwik";
+import { component$, useSignal, $, useVisibleTask$ } from "@builder.io/qwik";
 import {
   LuCornerUpLeft,
   LuImage,
@@ -10,8 +9,10 @@ import {
   LuPause,
   LuDownload,
   LuCheck,
+  LuPlus,
 } from "@qwikest/icons/lucide";
 import { getGenderColor, getGenderBorderColor, formatTime } from "../../utils/helpers";
+import { UserContextMenu } from "../ui/UserContextMenu";
 
 export const MessageBubble = component$(
   ({
@@ -23,12 +24,22 @@ export const MessageBubble = component$(
     onDeleteMessage,
     onImageClick,
     deletingMessageId,
-    accentColor = "purple", // "purple" for rooms, "pink" for DMs
+    accentColor = "purple",
+    currentUserId,
+    onReactToMessage,
+    onRemoveReaction,
+    onOpenReactionPicker,
   }) => {
     const hasReply = msg.reply_to_message_id && msg.reply_to_message_content;
     const isMediaMessage = ["image", "gif", "audio"].includes(msg.type);
     const audioRef = useSignal(null);
     const isPlaying = useSignal(false);
+
+    // Context menu state
+    const showContextMenu = useSignal(false);
+    const contextMenuPosition = useSignal({ x: 0, y: 0 });
+    const avatarRef = useSignal(null);
+    const avatarElement = useSignal(null);
 
     const toggleAudio = $(() => {
       if (!audioRef.value) return;
@@ -39,6 +50,91 @@ export const MessageBubble = component$(
         audioRef.value.play();
         isPlaying.value = true;
       }
+    });
+
+    // In updateMenuPosition function, update to also track avatar position:
+    const updateMenuPosition = $(() => {
+      if (!showContextMenu.value || !avatarElement.value) return;
+
+      const rect = avatarElement.value.getBoundingClientRect();
+      const menuWidth = 256; // w-64
+      const menuHeight = 450; // approximate
+
+      let menuX = rect.right + 10;
+      let menuY = rect.top;
+
+      // Adjust if going off right edge
+      if (menuX + menuWidth > window.innerWidth) {
+        menuX = rect.left - menuWidth - 10;
+      }
+
+      // Keep within vertical bounds (with 80px top margin for navbar, 20px bottom margin)
+      const topLimit = 80;
+      const bottomLimit = window.innerHeight - 20;
+
+      if (menuY < topLimit) {
+        menuY = topLimit;
+      } else if (menuY + menuHeight > bottomLimit) {
+        menuY = bottomLimit - menuHeight;
+      }
+
+      contextMenuPosition.value = {
+        x: menuX,
+        y: menuY,
+        avatarX: rect.left,
+        avatarY: rect.top
+      };
+    });
+
+    const handleAvatarClick = $((e) => {
+      e.stopPropagation();
+      avatarElement.value = e.target;
+      showContextMenu.value = true;
+      updateMenuPosition();
+    });
+
+    // Update menu position on scroll
+    useVisibleTask$(({ track, cleanup }) => {
+      track(() => showContextMenu.value);
+
+      if (!showContextMenu.value) return;
+
+      const handleScroll = () => {
+        requestAnimationFrame(() => {
+          updateMenuPosition();
+        });
+      };
+
+      // Find all scrollable containers
+      const scrollableContainers = [
+        // Messages container with overflow-y-auto
+        ...Array.from(document.querySelectorAll('.overflow-y-auto')),
+        // Flex container
+        ...Array.from(document.querySelectorAll('.flex-1.overflow-y-auto')),
+        // Any parent with scroll
+        document.body,
+        window
+      ];
+
+      // Add scroll listeners to all potential containers
+      scrollableContainers.forEach(container => {
+        if (container === window) {
+          window.addEventListener('scroll', handleScroll, { passive: true });
+        } else if (container instanceof Element) {
+          container.addEventListener('scroll', handleScroll, { passive: true });
+        }
+      });
+
+      // Cleanup all listeners
+      cleanup(() => {
+        scrollableContainers.forEach(container => {
+          if (container === window) {
+            window.removeEventListener('scroll', handleScroll);
+          } else if (container instanceof Element) {
+            container.removeEventListener('scroll', handleScroll);
+          }
+        });
+      });
     });
 
     const renderMediaContent = () => {
@@ -87,12 +183,94 @@ export const MessageBubble = component$(
 
             {/* Image */}
             <div class={`flex ${isOwn ? "justify-end" : "justify-start"}`}>
-              <img
-                src={msg.content}
-                alt={msg.type}
-                class="max-w-[150px] max-h-[100px] rounded-lg shadow-sm cursor-pointer hover:opacity-90 transition-opacity object-cover"
-                onClick$={() => onImageClick(msg.id, msg.content)}
-              />
+              <div class="inline-block relative">
+                <img
+                  src={msg.content}
+                  alt={msg.type}
+                  class="max-w-[150px] max-h-[100px] rounded-lg shadow-sm cursor-pointer hover:opacity-90 transition-opacity object-cover"
+                  onClick$={() => onImageClick(msg.id, msg.content)}
+                />
+
+                {/* Reactions below image */}
+                {msg.reactions && msg.reactions.length > 0 && (
+                  <div class="flex flex-wrap gap-1 mt-1 pointer-events-auto">
+                    {Object.entries(
+                      msg.reactions.reduce((acc, reaction) => {
+                        if (!acc[reaction.emoji]) acc[reaction.emoji] = [];
+                        acc[reaction.emoji].push(reaction);
+                        return acc;
+                      }, {})
+                    ).map(([emoji, reactions]) => {
+                      const userReaction = reactions.find(r => r.user_id === currentUserId);
+                      const hasUserReacted = !!userReaction;
+
+                      return (
+                        <button
+                          key={emoji}
+                          onClick$={() => {
+                            if (hasUserReacted) {
+                              onRemoveReaction(msg.id, userReaction.id);
+                            } else {
+                              onReactToMessage(msg.id, emoji);
+                            }
+                          }}
+                          class={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs transition-all ${hasUserReacted
+                            ? `bg-${accentColor}-100 border border-${accentColor}-300 text-${accentColor}-700`
+                            : 'bg-gray-100 border border-gray-200 text-gray-700 hover:bg-gray-200'
+                            }`}
+                          title={reactions.map(r => r.username || 'User').join(', ')}
+                        >
+                          <span>{emoji}</span>
+                          <span class="font-medium">{reactions.length}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Quick reaction buttons for media */}
+                {!isOwn && (
+                  <div class="flex gap-1 mt-1 pointer-events-auto">
+                    {['❤️', '👍', '😂', '😮', '😢'].map(emoji => {
+                      const existingReaction = (msg.reactions || []).find(
+                        r => r.emoji === emoji && r.user_id === currentUserId
+                      );
+
+                      return (
+                        <button
+                          key={emoji}
+                          onClick$={() => {
+                            if (existingReaction) {
+                              onRemoveReaction(msg.id, existingReaction.id);
+                            } else {
+                              onReactToMessage(msg.id, emoji);
+                            }
+                          }}
+                          class={`w-6 h-6 flex items-center justify-center rounded transition-colors text-sm ${existingReaction
+                            ? `bg-${accentColor}-100 border border-${accentColor}-300`
+                            : 'hover:bg-gray-100'
+                            }`}
+                          title={`React with ${emoji}`}
+                        >
+                          {emoji}
+                        </button>
+                      );
+                    })}
+                    <button
+                      onClick$={(e) => {
+                        e.stopPropagation();
+                        if (onOpenReactionPicker) {
+                          onOpenReactionPicker(msg.id);
+                        }
+                      }}
+                      class="w-6 h-6 flex items-center justify-center hover:bg-gray-100 rounded transition-colors text-gray-500 border border-gray-300"
+                      title="More reactions"
+                    >
+                      <LuPlus class="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         );
@@ -137,179 +315,272 @@ export const MessageBubble = component$(
     const checkColor = accentColor === "purple" ? "text-purple-600" : "text-pink-600";
 
     return (
-      <div key={msg.id} class="group">
-        {isOwn ? (
-          // Own Message (Right aligned)
-          <div class="flex items-start justify-end gap-2 px-2 py-1.5 hover:bg-gray-50 rounded">
-            <div class="flex-1 min-w-0 flex flex-col items-end gap-1">
-              {/* Reply Preview */}
-              {hasReply && (
-                <div class={`w-full max-w-[80%] sm:max-w-[65%] md:max-w-[50%] lg:max-w-[40%] xl:max-w-[30%] ${replyBgColor} border-l-2 rounded-r p-1.5 mb-1`}>
-                  <div class="flex items-start gap-1.5">
-                    <LuCornerUpLeft class={`w-3 h-3 ${replyIconColor} mt-0.5 flex-shrink-0`} />
-                    <div class="flex-1 min-w-0">
-                      <div class="flex items-center gap-1.5 mb-0.5">
-                        <div class={`text-xs font-medium ${getGenderColor(msg.reply_to_message_gender)}`}>
-                          {msg.reply_to_message_sender}
+      <>
+        <div key={msg.id} class="group">
+          {isOwn ? (
+            // Own Message (Right aligned)
+            <div class="flex items-start justify-end gap-1 px-2 py-1.5 hover:bg-gray-50 rounded"> {/* Changed gap-2 to gap-1 here */}
+              <div class="flex-1 min-w-0 flex flex-col items-end gap-1">
+                {/* Reply Preview */}
+                {hasReply && (
+                  <div class={`w-full max-w-[80%] sm:max-w-[65%] md:max-w-[50%] lg:max-w-[40%] xl:max-w-[30%] ${replyBgColor} border-l-2 rounded-r p-1.5 mb-1`}>
+                    <div class="flex items-start gap-1.5">
+                      <LuCornerUpLeft class={`w-3 h-3 ${replyIconColor} mt-0.5 flex-shrink-0`} />
+                      <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-1.5 mb-0.5">
+                          <div class={`text-xs font-medium ${getGenderColor(msg.reply_to_message_gender)}`}>
+                            {msg.reply_to_message_sender}
+                          </div>
+                          <div class="text-xs text-gray-500">{formatTime(msg.reply_to_message_time)}</div>
                         </div>
-                        <div class="text-xs text-gray-500">{formatTime(msg.reply_to_message_time)}</div>
+                        {(msg.reply_to_message_type === "image" || msg.reply_to_message_type === "gif") && (
+                          <div class="flex items-center gap-1 mb-0.5">
+                            <LuImage class="w-3 h-3 text-gray-500" />
+                            <span class="text-xs text-gray-700">Image</span>
+                          </div>
+                        )}
+                        {msg.reply_to_message_type === "audio" && (
+                          <div class="flex items-center gap-1 mb-0.5">
+                            <LuMic class="w-3 h-3 text-gray-500" />
+                            <span class="text-xs text-gray-700">Voice message</span>
+                          </div>
+                        )}
+                        {msg.reply_to_message_caption && (
+                          <p class="text-xs text-gray-700">{msg.reply_to_message_caption}</p>
+                        )}
+                        {msg.reply_to_message_type === "text" && (
+                          <p class="text-xs text-gray-700 truncate">{msg.reply_to_message_content}</p>
+                        )}
                       </div>
-                      {(msg.reply_to_message_type === "image" || msg.reply_to_message_type === "gif") && (
-                        <div class="flex items-center gap-1 mb-0.5">
-                          <LuImage class="w-3 h-3 text-gray-500" />
-                          <span class="text-xs text-gray-700">Image</span>
-                        </div>
-                      )}
-                      {msg.reply_to_message_type === "audio" && (
-                        <div class="flex items-center gap-1 mb-0.5">
-                          <LuMic class="w-3 h-3 text-gray-500" />
-                          <span class="text-xs text-gray-700">Voice message</span>
-                        </div>
-                      )}
-                      {msg.reply_to_message_caption && (
-                        <p class="text-xs text-gray-700">{msg.reply_to_message_caption}</p>
-                      )}
-                      {msg.reply_to_message_type === "text" && (
-                        <p class="text-xs text-gray-700 truncate">{msg.reply_to_message_content}</p>
-                      )}
                     </div>
                   </div>
-                </div>
-              )}
-
-              <div class="flex items-start gap-2 justify-end">
-                {/* Time on left */}
-                {showTime && (
-                  <span class="text-xs text-gray-500 flex-shrink-0 self-end">
-                    {formatTime(msg.created_at)}
-                  </span>
                 )}
 
-                <div class="flex-1 min-w-0">
-                  {/* Message text */}
-                  {msg.type === "text" && (
-                    <span
-                      onClick$={() => onMessageClick(msg.id)}
-                      class="text-sm text-gray-900 cursor-pointer break-words whitespace-pre-wrap inline-block text-right w-full"
-                    >
-                      {msg.content}
+                <div class="flex items-start gap-1 justify-end">
+                  {/* Time on left */}
+                  {showTime && (
+                    <span class="text-xs text-gray-500 flex-shrink-0 self-end">
+                      {formatTime(msg.created_at)}
                     </span>
                   )}
 
-                  {/* Media caption */}
-                  {isMediaMessage && msg.caption && (
-                    <span class="text-sm text-gray-900 break-words whitespace-pre-wrap inline-block text-right w-full">
-                      {msg.caption}
-                    </span>
-                  )}
-                </div>
-
-                {/* Avatar on right */}
-                <div class={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-[12px] font-semibold border-2 bg-white ${ownBorderColor} cursor-default mt-0.5`}>
-                  {msg.sender_username?.charAt(0).toUpperCase()}
-                </div>
-              </div>
-
-              {/* Media content */}
-              {isMediaMessage && renderMediaContent()}
-            </div>
-          </div>
-        ) : (
-          // Other's Message (Left aligned)
-          <div class="flex items-start gap-2 px-2 py-1.5 hover:bg-gray-50 rounded">
-            <div class="flex-1 min-w-0 flex flex-col gap-1">
-              {/* Reply Preview */}
-              {hasReply && (
-                <div class="w-full max-w-[80%] sm:max-w-[65%] md:max-w-[50%] lg:max-w-[40%] xl:max-w-[30%] bg-gray-100 border-l-2 border-gray-300 rounded-r p-1.5">
-                  <div class="flex items-start gap-1.5">
-                    <LuCornerUpLeft class="w-3 h-3 text-gray-500 mt-0.5 flex-shrink-0" />
-                    <div class="flex-1 min-w-0">
-                      <div class="flex items-center gap-1.5 mb-0.5">
-                        <div class={`text-xs font-medium ${getGenderColor(msg.reply_to_message_gender)}`}>
-                          {msg.reply_to_message_sender}
-                        </div>
-                        <div class="text-xs text-gray-500">{formatTime(msg.reply_to_message_time)}</div>
-                      </div>
-                      {(msg.reply_to_message_type === "image" || msg.reply_to_message_type === "gif") && (
-                        <div class="flex items-center gap-1 mb-0.5">
-                          <LuImage class="w-3 h-3 text-gray-500" />
-                          <span class="text-xs text-gray-700">Image</span>
-                        </div>
-                      )}
-                      {msg.reply_to_message_type === "audio" && (
-                        <div class="flex items-center gap-1 mb-0.5">
-                          <LuMic class="w-3 h-3 text-gray-500" />
-                          <span class="text-xs text-gray-700">Voice message</span>
-                        </div>
-                      )}
-                      {msg.reply_to_message_caption && (
-                        <p class="text-xs text-gray-700">{msg.reply_to_message_caption}</p>
-                      )}
-                      {msg.reply_to_message_type === "text" && (
-                        <p class="text-xs text-gray-700 truncate">{msg.reply_to_message_content}</p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div class="flex items-start gap-2">
-                {/* Avatar */}
-                <div
-                  class="flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-[12px] font-semibold border-2 bg-white mt-0.5"
-                  style={`color: ${getGenderBorderColor(msg.sender_gender)}; border-color: ${getGenderBorderColor(msg.sender_gender)};`}
-                >
-                  {msg.sender_username?.charAt(0).toUpperCase()}
-                </div>
-
-                <div class="flex-1 min-w-0">
-                  <div class="flex flex-wrap items-baseline gap-x-1.5">
-                    {/* Message text with username */}
+                  <div class="flex-1 min-w-0">
+                    {/* Message text */}
                     {msg.type === "text" && (
                       <span
                         onClick$={() => onMessageClick(msg.id)}
-                        class="text-sm text-gray-900 cursor-pointer break-words whitespace-pre-wrap flex-1 min-w-0"
+                        class="text-sm text-gray-900 cursor-pointer break-words whitespace-pre-wrap inline-block text-right w-full"
                       >
-                        <button
-                          onClick$={() => onUsernameClick(msg)}
-                          class={`font-bold text-sm hover:underline flex-shrink-0 ${getGenderColor(msg.sender_gender)}`}
-                        >
-                          {msg.sender_username}:{" "}
-                        </button>
                         {msg.content}
                       </span>
                     )}
 
                     {/* Media caption */}
-                    {isMediaMessage && msg.caption && (
-                      <span class="text-sm text-gray-900 break-words whitespace-pre-wrap flex-1 min-w-0">
+                    {isMediaMessage && msg.caption && msg.caption.trim() && (
+                      <span class="text-sm text-gray-900 break-words whitespace-pre-wrap inline-block text-right w-full">
                         {msg.caption}
                       </span>
                     )}
+                  </div>
 
-                    {/* Time on right */}
-                    {showTime && (
-                      <span class="text-xs text-gray-500 flex-shrink-0 ml-auto">
-                        {formatTime(msg.created_at)}
-                      </span>
-                    )}
+                  {/* Avatar on right */}
+                  <button
+                    ref={avatarRef}
+                    onClick$={handleAvatarClick}
+                    class={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-[12px] font-semibold border-2 bg-white ${ownBorderColor} cursor-pointer transition-all mt-0.5 ${showContextMenu.value
+                        ? `ring-2 ring-offset-1 ring-${accentColor}-500 shadow-lg`
+                        : `hover:ring-2 hover:ring-offset-1 hover:ring-${accentColor}-300`
+                      }`}
+                  >
+                    {msg.sender_username?.charAt(0).toUpperCase()}
+                  </button>
+                </div>
+
+                {/* Media content */}
+                {isMediaMessage && renderMediaContent()}
+              </div>
+            </div>
+          ) : (
+            // Other's Message (Left aligned)
+            <div class="flex items-start gap-2 px-2 py-1.5 hover:bg-gray-50 rounded">
+              <div class="flex-1 min-w-0 flex flex-col gap-1">
+                {/* Reply Preview */}
+                {hasReply && (
+                  <div class="w-full max-w-[80%] sm:max-w-[65%] md:max-w-[50%] lg:max-w-[40%] xl:max-w-[30%] bg-gray-100 border-l-2 border-gray-300 rounded-r p-1.5">
+                    <div class="flex items-start gap-1.5">
+                      <LuCornerUpLeft class="w-3 h-3 text-gray-500 mt-0.5 flex-shrink-0" />
+                      <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-1.5 mb-0.5">
+                          <div class={`text-xs font-medium ${getGenderColor(msg.reply_to_message_gender)}`}>
+                            {msg.reply_to_message_sender}
+                          </div>
+                          <div class="text-xs text-gray-500">{formatTime(msg.reply_to_message_time)}</div>
+                        </div>
+                        {(msg.reply_to_message_type === "image" || msg.reply_to_message_type === "gif") && (
+                          <div class="flex items-center gap-1 mb-0.5">
+                            <LuImage class="w-3 h-3 text-gray-500" />
+                            <span class="text-xs text-gray-700">Image</span>
+                          </div>
+                        )}
+                        {msg.reply_to_message_type === "audio" && (
+                          <div class="flex items-center gap-1 mb-0.5">
+                            <LuMic class="w-3 h-3 text-gray-500" />
+                            <span class="text-xs text-gray-700">Voice message</span>
+                          </div>
+                        )}
+                        {msg.reply_to_message_caption && (
+                          <p class="text-xs text-gray-700">{msg.reply_to_message_caption}</p>
+                        )}
+                        {msg.reply_to_message_type === "text" && (
+                          <p class="text-xs text-gray-700 truncate">{msg.reply_to_message_content}</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div class="flex items-start gap-2">
+                  {/* Avatar - Clickable */}
+                  <button
+                    ref={avatarRef}
+                    onClick$={handleAvatarClick}
+                    class={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-[12px] font-semibold border-2 bg-white mt-0.5 cursor-pointer transition-all ${showContextMenu.value
+                        ? 'ring-2 ring-offset-1'
+                        : 'hover:ring-2 hover:ring-offset-1'
+                      }`}
+                    style={`color: ${getGenderBorderColor(msg.sender_gender)}; border-color: ${getGenderBorderColor(msg.sender_gender)}; ${showContextMenu.value ? `box-shadow: 0 0 0 2px white, 0 0 0 4px ${getGenderBorderColor(msg.sender_gender)};` : ''}`}
+                  >
+                    {msg.sender_username?.charAt(0).toUpperCase()}
+                  </button>
+
+                  <div class="flex-1 min-w-0">
+                    <div class="flex flex-wrap items-baseline gap-x-1.5">
+                      {/* Message text with username */}
+                      {msg.type === "text" && (
+                        <span
+                          onClick$={() => onMessageClick(msg.id)}
+                          class="text-sm text-gray-900 cursor-pointer break-words whitespace-pre-wrap flex-1 min-w-0"
+                        >
+                          <button
+                            onClick$={() => onUsernameClick(msg)}
+                            class={`font-bold text-sm hover:underline flex-shrink-0 ${getGenderColor(msg.sender_gender)}`}
+                          >
+                            {msg.sender_username}:{" "}
+                          </button>
+                          {msg.content}
+                        </span>
+                      )}
+
+                      {/* Media caption */}
+                      {isMediaMessage && msg.caption && msg.caption.trim() && (
+                        <span class="text-sm text-gray-900 break-words whitespace-pre-wrap flex-1 min-w-0">
+                          {msg.caption}
+                        </span>
+                      )}
+
+                      {/* Time on right */}
+                      {showTime && (
+                        <span class="text-xs text-gray-500 flex-shrink-0 ml-auto">
+                          {formatTime(msg.created_at)}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
+
+                {/* Media content */}
+                {isMediaMessage && renderMediaContent()}
+
+                {/* Reactions for text messages - DISPLAY ONLY */}
+                {msg.type === "text" && msg.reactions && msg.reactions.length > 0 && (
+                  <div class="flex flex-wrap gap-1 mt-1 ml-7">
+                    {Object.entries(
+                      msg.reactions.reduce((acc, reaction) => {
+                        if (!acc[reaction.emoji]) acc[reaction.emoji] = [];
+                        acc[reaction.emoji].push(reaction);
+                        return acc;
+                      }, {})
+                    ).map(([emoji, reactions]) => {
+                      const userReaction = reactions.find(r => r.user_id === currentUserId);
+                      const hasUserReacted = !!userReaction;
+
+                      return (
+                        <button
+                          key={emoji}
+                          onClick$={() => {
+                            if (hasUserReacted) {
+                              onRemoveReaction(msg.id, userReaction.id);
+                            } else {
+                              onReactToMessage(msg.id, emoji);
+                            }
+                          }}
+                          class={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs transition-all ${hasUserReacted
+                            ? `bg-${accentColor}-100 border border-${accentColor}-300 text-${accentColor}-700`
+                            : 'bg-gray-100 border border-gray-200 text-gray-700 hover:bg-gray-200'
+                            }`}
+                          title={reactions.map(r => r.username || 'User').join(', ')}
+                        >
+                          <span>{emoji}</span>
+                          <span class="font-medium">{reactions.length}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-
-              {/* Media content */}
-              {isMediaMessage && renderMediaContent()}
             </div>
-          </div>
-        )}
+          )}
 
-        {/* Read indicator */}
-        {isOwn && msg.is_read && (
-          <div class="flex justify-end pr-2 mt-0.5">
-            <LuCheck class={`w-3 h-3 ${checkColor}`} />
-          </div>
-        )}
-      </div>
+          {/* Read indicator */}
+          {isOwn && msg.is_read === true && (
+            <div class="flex justify-end pr-2 mt-0.5">
+              <LuCheck class={`w-3 h-3 ${checkColor}`} />
+            </div>
+          )}
+        </div>
+
+        {/* Context Menu */}
+        <UserContextMenu
+          isOpen={showContextMenu.value}
+          onClose={$(() => showContextMenu.value = false)}
+          position={contextMenuPosition.value}
+          avatarPosition={contextMenuPosition.value} // Pass full position including avatar coords
+          username={msg.sender_username}
+          userId={msg.sender_id}
+          gender={msg.sender_gender}
+          onMessage={$((userId, username) => {
+            console.log('Message user:', userId, username);
+            // TODO: Implement later
+          })}
+          onWhisper={$((userId, username) => {
+            console.log('Whisper to:', userId, username);
+            // TODO: Implement later
+          })}
+          onMention={$((username) => {
+            console.log('Mention:', username);
+            // TODO: Implement later
+          })}
+          onIgnore={$((userId, username) => {
+            console.log('Ignore user:', userId, username);
+            // TODO: Implement later
+          })}
+          onViewProfile={$((userId, username) => {
+            console.log('View profile:', userId, username);
+            // TODO: Implement later
+          })}
+          onReport={$((userId, username) => {
+            console.log('Report user:', userId, username);
+            // TODO: Implement later
+          })}
+          onReact={$((emoji) => {
+            onReactToMessage(msg.id, emoji);
+          })}
+          onOpenReactionPicker={$(() => {
+            showContextMenu.value = false;
+            onOpenReactionPicker(msg.id);
+          })}
+        />
+      </>
     );
   }
 );

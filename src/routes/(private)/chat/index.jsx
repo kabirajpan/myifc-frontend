@@ -12,6 +12,7 @@ import { ChatContainer } from "../../../components/chat/ChatContainer.jsx";
 import { ChatSidebar } from "../../../components/chat/ChatSidebar.jsx";
 import { UserList } from "../../../components/chat/UserList.jsx";
 import { ImageViewer } from "../../../components/ui/ImageViewer.jsx";
+
 import { UnifiedSidebar } from "../../../components/chat/UnifiedSidebar.jsx";
 import { useUnifiedSidebar } from "../../../utils/useUnifiedSidebar.js";
 import { LuUserPlus, LuBan } from "@qwikest/icons/lucide";

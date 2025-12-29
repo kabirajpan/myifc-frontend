@@ -39,6 +39,10 @@ export const ChatContainer = component$(
         onClearError,
         onClearSuccess,
         currentUserId,
+
+        onReactToMessage, // 👈 ADD THIS
+        onRemoveReaction, // 👈 ADD THIS
+        onOpenReactionPicker, // 👈 ADD THIS
         // DM-specific props
         otherUserGender, // For DM mode
         headerAction, // Optional: custom header action button
@@ -148,6 +152,10 @@ export const ChatContainer = component$(
                                     onImageClick={onImageClick}
                                     deletingMessageId={deletingMessageId}
                                     accentColor={accentColor}
+                                    currentUserId={currentUserId} // 👈 ADD THIS
+                                    onReactToMessage={onReactToMessage} // 👈 ADD THIS
+                                    onRemoveReaction={onRemoveReaction} // 👈 ADD THIS
+                                    onOpenReactionPicker={onOpenReactionPicker} // 👈 ADD THIS
                                 />
 
                                 {/* ✅ Divider between OLD and NEW sections */}
@@ -266,8 +274,8 @@ export const ChatContainer = component$(
                                 onClick$={onLoadOlderMessages}
                                 disabled={isLoadingOlder}
                                 class={`px-4 py-2 text-xs font-medium rounded-lg transition-colors ${isLoadingOlder
-                                        ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                                        : `bg-${accentColor}-50 text-${accentColor}-700 hover:bg-${accentColor}-100 border border-${accentColor}-200`
+                                    ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                                    : `bg-${accentColor}-50 text-${accentColor}-700 hover:bg-${accentColor}-100 border border-${accentColor}-200`
                                     }`}
                             >
                                 {isLoadingOlder ? (
@@ -386,7 +394,11 @@ export const ChatContainer = component$(
                             />
                             <div class="relative">
                                 <button
-                                    onClick$={() => (showEmojiPicker.value = !showEmojiPicker.value)}
+                                    onClick$={() => {
+                                        console.log('Smile button clicked, current value:', showEmojiPicker.value);
+                                        showEmojiPicker.value = !showEmojiPicker.value;
+                                        console.log('New value:', showEmojiPicker.value);
+                                    }}
                                     class={`p-2 text-gray-400 hover:text-${accentColor}-600 transition-colors`}
                                     aria-label="Add emoji"
                                 >
