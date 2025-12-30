@@ -9,13 +9,18 @@ import {
   LuMaximize,
   LuMinimize,
   LuZoomIn,
-  LuZoomOut
+  LuZoomOut,
+  LuPlay,
+  LuPause,
+  LuVolume2,
+  LuVolumeX
 } from "@qwikest/icons/lucide";
 import { getGenderColor, getGenderBorderColor } from "../../utils/helpers";
 import { EmojiPicker } from "./EmojiPicker";
 
-export const ImageViewer = component$(({
-  imageUrl,
+export const MediaViewer = component$(({
+  mediaUrl,
+  mediaType = "image", // "image" | "gif" | "audio"
   isOpen,
   onClose,
   messageData = null,
@@ -27,21 +32,123 @@ export const ImageViewer = component$(({
   onReport = null,
   onShare = null,
 }) => {
-  if (!isOpen || !imageUrl) return null;
+  if (!isOpen || !mediaUrl) return null;
 
+  // Image/GIF states
   const rotation = useSignal(0);
+  const isFullscreen = useSignal(false);
+  const isHoveringImage = useSignal(false);
+  const zoomLevel = useSignal(1);
+  const isPanning = useSignal(false);
+  const panOffset = useSignal({ x: 0, y: 0 });
+  const panStart = useSignal({ x: 0, y: 0 });
+
+  // Audio states
+  const audioRef = useSignal(null);
+  const isPlaying = useSignal(false);
+  const currentTime = useSignal(0);
+  const duration = useSignal(0);
+  const volume = useSignal(1);
+  const isMuted = useSignal(false);
+  const waveformData = useSignal([]);
+
+  // Common states
   const showEmojiPicker = useSignal(false);
   const showReportDialog = useSignal(false);
   const reportReason = useSignal("");
   const reportDetails = useSignal("");
   const isReporting = useSignal(false);
-  const isFullscreen = useSignal(false);
-  const isHoveringImage = useSignal(false);
-  const zoomLevel = useSignal(1); // 1 = 100%
-  const isPanning = useSignal(false);
-  const panOffset = useSignal({ x: 0, y: 0 });
-  const panStart = useSignal({ x: 0, y: 0 });
 
+  const isAudio = mediaType === "audio";
+  const isImageOrGif = mediaType === "image" || mediaType === "gif";
+
+  // Audio Controls
+  const togglePlayPause = $(() => {
+    if (!audioRef.value) return;
+
+    if (isPlaying.value) {
+      audioRef.value.pause();
+    } else {
+      audioRef.value.play();
+    }
+  });
+
+  const handleTimeUpdate = $(() => {
+    if (audioRef.value) {
+      currentTime.value = audioRef.value.currentTime;
+    }
+  });
+
+  const handleLoadedMetadata = $(() => {
+    if (audioRef.value) {
+      duration.value = audioRef.value.duration;
+    }
+  });
+
+  const handleSeek = $((e) => {
+    if (!audioRef.value) return;
+    const rect = e.target.getBoundingClientRect();
+    const percent = (e.clientX - rect.left) / rect.width;
+    audioRef.value.currentTime = percent * duration.value;
+  });
+
+  const toggleMute = $(() => {
+    if (!audioRef.value) return;
+    isMuted.value = !isMuted.value;
+    audioRef.value.muted = isMuted.value;
+  });
+
+  const handleVolumeChange = $((e) => {
+    if (!audioRef.value) return;
+    const newVolume = parseFloat(e.target.value);
+    volume.value = newVolume;
+    audioRef.value.volume = newVolume;
+    isMuted.value = newVolume === 0;
+  });
+
+  const formatTime = (seconds) => {
+    if (isNaN(seconds)) return "0:00";
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // Generate waveform data from audio
+  const generateWaveform = $(async (audioUrl) => {
+    try {
+      const response = await fetch(audioUrl);
+      const arrayBuffer = await response.arrayBuffer();
+      
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      
+      const rawData = audioBuffer.getChannelData(0);
+      const samples = 60; // Number of bars
+      const blockSize = Math.floor(rawData.length / samples);
+      const filteredData = [];
+      
+      for (let i = 0; i < samples; i++) {
+        let blockStart = blockSize * i;
+        let sum = 0;
+        for (let j = 0; j < blockSize; j++) {
+          sum += Math.abs(rawData[blockStart + j]);
+        }
+        filteredData.push(sum / blockSize);
+      }
+      
+      // Normalize the data
+      const max = Math.max(...filteredData);
+      const normalizedData = filteredData.map(n => (n / max) * 100);
+      
+      waveformData.value = normalizedData;
+    } catch (err) {
+      console.error('Failed to generate waveform:', err);
+      // Fallback to simple bars if waveform generation fails
+      waveformData.value = Array.from({ length: 60 }, () => Math.random() * 60 + 20);
+    }
+  });
+
+  // Image Controls
   const handleRotate = $((e) => {
     e?.stopPropagation();
     rotation.value = (rotation.value + 90) % 360;
@@ -58,7 +165,6 @@ export const ImageViewer = component$(({
     e?.stopPropagation();
     if (zoomLevel.value > 1) {
       zoomLevel.value = Math.max(1, zoomLevel.value - 0.25);
-      // Reset pan when zooming out to 100%
       if (zoomLevel.value === 1) {
         panOffset.value = { x: 0, y: 0 };
       }
@@ -91,10 +197,8 @@ export const ImageViewer = component$(({
   const handleWheel = $((e) => {
     e.preventDefault();
     if (e.deltaY < 0) {
-      // Scroll up - zoom in
       handleZoomIn();
     } else {
-      // Scroll down - zoom out
       handleZoomOut();
     }
   });
@@ -106,8 +210,8 @@ export const ImageViewer = component$(({
       await onShare(messageData.id);
     } else {
       try {
-        await navigator.clipboard.writeText(imageUrl);
-        alert('Image URL copied to clipboard!');
+        await navigator.clipboard.writeText(mediaUrl);
+        alert('Media URL copied to clipboard!');
       } catch (err) {
         console.error('Failed to copy:', err);
       }
@@ -149,7 +253,6 @@ export const ImageViewer = component$(({
   const toggleFullscreen = $((e) => {
     e?.stopPropagation();
     isFullscreen.value = !isFullscreen.value;
-    // Reset zoom and pan when exiting fullscreen
     if (!isFullscreen.value) {
       zoomLevel.value = 1;
       panOffset.value = { x: 0, y: 0 };
@@ -161,7 +264,7 @@ export const ImageViewer = component$(({
     const handleKeyDown = (e) => {
       if (showReportDialog.value) return;
 
-      switch(e.key) {
+      switch (e.key) {
         case 'Escape':
           if (isFullscreen.value) {
             isFullscreen.value = false;
@@ -181,27 +284,37 @@ export const ImageViewer = component$(({
             onNext();
           }
           break;
+        case ' ':
+          if (isAudio) {
+            e.preventDefault();
+            togglePlayPause();
+          }
+          break;
         case 'r':
         case 'R':
-          rotation.value = (rotation.value + 90) % 360;
+          if (isImageOrGif) {
+            rotation.value = (rotation.value + 90) % 360;
+          }
           break;
         case 'f':
         case 'F':
-          isFullscreen.value = !isFullscreen.value;
-          if (!isFullscreen.value) {
-            zoomLevel.value = 1;
-            panOffset.value = { x: 0, y: 0 };
+          if (isImageOrGif) {
+            isFullscreen.value = !isFullscreen.value;
+            if (!isFullscreen.value) {
+              zoomLevel.value = 1;
+              panOffset.value = { x: 0, y: 0 };
+            }
           }
           break;
         case '+':
         case '=':
-          if (isFullscreen.value && zoomLevel.value < 3) {
+          if (isImageOrGif && isFullscreen.value && zoomLevel.value < 3) {
             zoomLevel.value = Math.min(3, zoomLevel.value + 0.25);
           }
           break;
         case '-':
         case '_':
-          if (isFullscreen.value && zoomLevel.value > 1) {
+          if (isImageOrGif && isFullscreen.value && zoomLevel.value > 1) {
             zoomLevel.value = Math.max(1, zoomLevel.value - 0.25);
             if (zoomLevel.value === 1) {
               panOffset.value = { x: 0, y: 0 };
@@ -215,8 +328,34 @@ export const ImageViewer = component$(({
     return () => window.removeEventListener('keydown', handleKeyDown);
   });
 
-  // Fullscreen mode - completely covers screen
-  if (isFullscreen.value) {
+  // Audio event listeners
+  useVisibleTask$(() => {
+    if (!isAudio || !audioRef.value) return;
+
+    const audio = audioRef.value;
+
+    audio.addEventListener('play', () => { isPlaying.value = true; });
+    audio.addEventListener('pause', () => { isPlaying.value = false; });
+    audio.addEventListener('ended', () => { isPlaying.value = false; });
+
+    return () => {
+      audio.pause();
+      audio.currentTime = 0;
+    };
+  });
+
+  // Generate waveform when audio URL is available
+  useVisibleTask$(({ track }) => {
+    track(() => mediaUrl);
+    track(() => isAudio);
+    
+    if (isAudio && mediaUrl) {
+      generateWaveform(mediaUrl);
+    }
+  });
+
+  // Fullscreen mode for images/gifs
+  if (isFullscreen.value && isImageOrGif) {
     return (
       <div
         class="fixed inset-0 top-0 bg-black z-[200] flex items-center justify-center overflow-hidden"
@@ -227,9 +366,8 @@ export const ImageViewer = component$(({
         onMouseUp$={handleMouseUp}
         onWheel$={handleWheel}
       >
-        {/* Image */}
         <img
-          src={imageUrl}
+          src={mediaUrl}
           alt="Full size preview"
           class="max-w-full max-h-full object-contain transition-transform duration-300"
           style={`
@@ -240,12 +378,9 @@ export const ImageViewer = component$(({
           onMouseDown$={handleMouseDown}
         />
 
-        {/* Hover Controls */}
         {isHoveringImage.value && (
           <>
-            {/* Top Controls */}
             <div class="absolute top-4 right-4 flex items-center gap-2">
-              {/* Zoom Controls */}
               <div class="flex items-center gap-1 bg-black/50 rounded-full p-1 backdrop-blur-sm">
                 <button
                   onClick$={handleZoomOut}
@@ -284,13 +419,11 @@ export const ImageViewer = component$(({
               </button>
             </div>
 
-            {/* Left Navigation */}
             {hasPrevious && onPrevious && (
               <button
                 onClick$={(e) => {
                   e.stopPropagation();
                   onPrevious();
-                  // Reset zoom when changing images
                   zoomLevel.value = 1;
                   panOffset.value = { x: 0, y: 0 };
                 }}
@@ -301,13 +434,11 @@ export const ImageViewer = component$(({
               </button>
             )}
 
-            {/* Right Navigation */}
             {hasNext && onNext && (
               <button
                 onClick$={(e) => {
                   e.stopPropagation();
                   onNext();
-                  // Reset zoom when changing images
                   zoomLevel.value = 1;
                   panOffset.value = { x: 0, y: 0 };
                 }}
@@ -330,7 +461,7 @@ export const ImageViewer = component$(({
         class="fixed inset-0 top-16 bg-black/95 z-[100] flex flex-col"
         onClick$={onClose}
       >
-        {/* Close Button - Top Right */}
+        {/* Close Button */}
         <button
           onClick$={onClose}
           class="absolute top-4 right-4 p-2 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors z-10"
@@ -339,7 +470,7 @@ export const ImageViewer = component$(({
           <LuX class="w-6 h-6" />
         </button>
 
-        {/* Sender Name - Top Center */}
+        {/* Sender Info */}
         {messageData && (
           <div class="flex flex-col items-center pt-6 pb-3 px-4">
             <div class="flex items-center gap-2 mb-2">
@@ -356,7 +487,6 @@ export const ImageViewer = component$(({
               </div>
             </div>
 
-            {/* Caption/Message */}
             {messageData.caption && (
               <div class="max-w-2xl text-center">
                 <p class="text-sm text-white/90">{messageData.caption}</p>
@@ -365,42 +495,110 @@ export const ImageViewer = component$(({
           </div>
         )}
 
-        {/* Image Container */}
+        {/* Media Container */}
         <div class="flex-1 flex items-center justify-center px-4 py-6 relative">
           <div onClick$={(e) => e.stopPropagation()}>
-            <img
-              src={imageUrl}
-              alt="Full size preview"
-              class="max-w-full max-h-[60vh] object-contain rounded-lg shadow-2xl transition-transform duration-300"
-              style={`transform: rotate(${rotation.value}deg)`}
-            />
+            {isAudio ? (
+              /* Audio Player - Minimalistic Design */
+              <div class="w-full max-w-2xl bg-white/5 backdrop-blur-sm rounded-lg p-6 border border-white/10">
+                {/* Audio Element */}
+                <audio
+                  ref={audioRef}
+                  src={mediaUrl}
+                  onTimeUpdate$={handleTimeUpdate}
+                  onLoadedMetadata$={handleLoadedMetadata}
+                  class="hidden"
+                />
+
+                {/* Waveform Progress Bar */}
+                <div class="mb-6">
+                  <div
+                    class="w-full h-16 bg-white/10 rounded cursor-pointer overflow-hidden relative"
+                    onClick$={handleSeek}
+                  >
+                    {/* Waveform bars */}
+                    <div class="absolute inset-0 flex items-center justify-around px-1">
+                      {waveformData.value.length > 0 ? (
+                        waveformData.value.map((height, i) => {
+                          const progress = duration.value > 0 ? (currentTime.value / duration.value) * 100 : 0;
+                          const barProgress = (i / waveformData.value.length) * 100;
+                          const isActive = barProgress <= progress;
+                          
+                          return (
+                            <div
+                              key={i}
+                              class="w-1 rounded-full transition-all duration-150"
+                              style={`height: ${Math.max(height, 10)}%; background-color: ${isActive ? 'rgba(255, 255, 255, 0.9)' : 'rgba(255, 255, 255, 0.3)'}`}
+                            />
+                          );
+                        })
+                      ) : (
+                        // Loading placeholder
+                        <div class="text-white/40 text-sm">Loading waveform...</div>
+                      )}
+                    </div>
+                  </div>
+                  
+                  {/* Time Display */}
+                  <div class="flex justify-between text-sm text-white/60 mt-3">
+                    <span>{formatTime(currentTime.value)}</span>
+                    <span>{formatTime(duration.value)}</span>
+                  </div>
+                </div>
+
+                {/* Controls */}
+                <div class="flex items-center justify-between">
+                  {/* Play/Pause Button */}
+                  <button
+                    onClick$={togglePlayPause}
+                    class="w-12 h-12 bg-white/10 hover:bg-white/20 rounded-full flex items-center justify-center transition-all"
+                  >
+                    {isPlaying.value ? (
+                      <LuPause class="w-6 h-6 text-white" />
+                    ) : (
+                      <LuPlay class="w-6 h-6 text-white ml-0.5" />
+                    )}
+                  </button>
+
+                  {/* Volume Control */}
+                  <div class="flex items-center gap-3 flex-1 max-w-xs ml-6">
+                    <button
+                      onClick$={toggleMute}
+                      class="text-white/60 hover:text-white transition-colors"
+                    >
+                      {isMuted.value || volume.value === 0 ? (
+                        <LuVolumeX class="w-5 h-5" />
+                      ) : (
+                        <LuVolume2 class="w-5 h-5" />
+                      )}
+                    </button>
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      value={volume.value}
+                      onInput$={handleVolumeChange}
+                      class="flex-1 h-1 bg-white/20 rounded-full appearance-none cursor-pointer"
+                      style="accent-color: rgba(255, 255, 255, 0.8);"
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* Image/GIF */
+              <img
+                src={mediaUrl}
+                alt="Full size preview"
+                class="max-w-full max-h-[60vh] object-contain rounded-lg shadow-2xl transition-transform duration-300"
+                style={`transform: rotate(${rotation.value}deg)`}
+              />
+            )}
           </div>
         </div>
 
-        {/* Emoji Reactions - Center */}
-        <div class="flex flex-col items-center gap-3 pb-4 px-4">
-          {/* Emoji Picker Button */}
-          {messageData && onReact && (
-            <div class="relative">
-              <button
-                onClick$={(e) => {
-                  e.stopPropagation();
-                  showEmojiPicker.value = !showEmojiPicker.value;
-                }}
-                class="p-3 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors"
-                title="React with emoji"
-              >
-                <LuSmile class="w-6 h-6" />
-              </button>
-              <EmojiPicker
-                show={showEmojiPicker.value}
-                onEmojiSelect={handleEmojiSelect}
-                onClose={$(() => (showEmojiPicker.value = false))}
-              />
-            </div>
-          )}
-
-          {/* Reactions Display */}
+        {/* Emoji Reactions */}
+        <div class="flex items-center justify-center gap-3 pb-4 px-4">
           {messageData?.reactions && messageData.reactions.length > 0 && (
             <div class="flex items-center gap-2 bg-black/40 backdrop-blur-sm px-4 py-2 rounded-full">
               {messageData.reactions.slice(0, 5).map((reaction) => (
@@ -413,11 +611,43 @@ export const ImageViewer = component$(({
               )}
             </div>
           )}
+
+          {messageData && onReact && (
+            <>
+              <button
+                onClick$={(e) => {
+                  e.stopPropagation();
+                  showEmojiPicker.value = !showEmojiPicker.value;
+                }}
+                class="p-3 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors"
+                title="React with emoji"
+              >
+                <LuSmile class="w-6 h-6" />
+              </button>
+
+              {showEmojiPicker.value && (
+                <div
+                  class="fixed inset-0 z-[150] flex items-center justify-center"
+                  onClick$={(e) => {
+                    e.stopPropagation();
+                    showEmojiPicker.value = false;
+                  }}
+                >
+                  <div onClick$={(e) => e.stopPropagation()}>
+                    <EmojiPicker
+                      show={true}
+                      onEmojiSelect={handleEmojiSelect}
+                      onClose={$(() => (showEmojiPicker.value = false))}
+                    />
+                  </div>
+                </div>
+              )}
+            </>
+          )}
         </div>
 
-        {/* Bottom Controls: Report | Rotate | Fullscreen | Previous | Next */}
+        {/* Bottom Controls */}
         <div class="flex items-center justify-center gap-3 pb-6 px-4">
-          {/* Report */}
           {messageData && (
             <button
               onClick$={(e) => {
@@ -434,31 +664,32 @@ export const ImageViewer = component$(({
             </button>
           )}
 
-          {/* Rotate */}
-          <button
-            onClick$={handleRotate}
-            class="flex flex-col items-center gap-1 p-2 text-white/80 hover:text-white transition-colors group"
-            title="Rotate (R)"
-          >
-            <div class="p-2 bg-white/10 group-hover:bg-white/20 rounded-full transition-colors">
-              <LuRotateCw class="w-5 h-5" />
-            </div>
-            <span class="text-xs">Rotate</span>
-          </button>
+          {isImageOrGif && (
+            <>
+              <button
+                onClick$={handleRotate}
+                class="flex flex-col items-center gap-1 p-2 text-white/80 hover:text-white transition-colors group"
+                title="Rotate (R)"
+              >
+                <div class="p-2 bg-white/10 group-hover:bg-white/20 rounded-full transition-colors">
+                  <LuRotateCw class="w-5 h-5" />
+                </div>
+                <span class="text-xs">Rotate</span>
+              </button>
 
-          {/* Fullscreen */}
-          <button
-            onClick$={toggleFullscreen}
-            class="flex flex-col items-center gap-1 p-2 text-white/80 hover:text-white transition-colors group"
-            title="Fullscreen (F)"
-          >
-            <div class="p-2 bg-white/10 group-hover:bg-white/20 rounded-full transition-colors">
-              <LuMaximize class="w-5 h-5" />
-            </div>
-            <span class="text-xs">Fullscreen</span>
-          </button>
+              <button
+                onClick$={toggleFullscreen}
+                class="flex flex-col items-center gap-1 p-2 text-white/80 hover:text-white transition-colors group"
+                title="Fullscreen (F)"
+              >
+                <div class="p-2 bg-white/10 group-hover:bg-white/20 rounded-full transition-colors">
+                  <LuMaximize class="w-5 h-5" />
+                </div>
+                <span class="text-xs">Fullscreen</span>
+              </button>
+            </>
+          )}
 
-          {/* Previous */}
           <button
             onClick$={(e) => {
               e.stopPropagation();
@@ -474,7 +705,6 @@ export const ImageViewer = component$(({
             <span class="text-xs">Previous</span>
           </button>
 
-          {/* Next */}
           <button
             onClick$={(e) => {
               e.stopPropagation();
@@ -498,7 +728,7 @@ export const ImageViewer = component$(({
             onClick$={(e) => e.stopPropagation()}
           >
             <div class="bg-white rounded-lg p-6 max-w-md w-full shadow-2xl">
-              <h3 class="text-lg font-semibold mb-4">Report Image</h3>
+              <h3 class="text-lg font-semibold mb-4">Report Media</h3>
 
               <form onSubmit$={handleReportSubmit}>
                 <div class="mb-4">

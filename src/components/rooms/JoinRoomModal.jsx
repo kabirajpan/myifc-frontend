@@ -1,9 +1,9 @@
 import { component$, useSignal } from "@builder.io/qwik";
-import { LuX, LuSearch, LuUsers, LuLock } from "@qwikest/icons/lucide";
+import { LuX, LuSearch, LuUsers } from "@qwikest/icons/lucide";
 
 export const JoinRoomModal = component$(({ isOpen, onClose, onJoin, publicRooms }) => {
   const searchQuery = useSignal("");
-
+  
   const filteredRooms = (publicRooms || []).filter(room => 
     room.name.toLowerCase().includes(searchQuery.value.toLowerCase()) ||
     (room.description || '').toLowerCase().includes(searchQuery.value.toLowerCase())
@@ -15,10 +15,10 @@ export const JoinRoomModal = component$(({ isOpen, onClose, onJoin, publicRooms 
     <>
       {/* Backdrop */}
       <div class="fixed inset-0 bg-black/50 z-50" onClick$={onClose} />
-      
+
       {/* Modal */}
       <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div class="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[80vh] flex flex-col">
+        <div class="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[80vh] flex flex-col">
           {/* Header */}
           <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
             <h3 class="text-base font-semibold text-gray-900">Join a Room</h3>
@@ -44,7 +44,7 @@ export const JoinRoomModal = component$(({ isOpen, onClose, onJoin, publicRooms 
             </div>
           </div>
 
-          {/* Room List */}
+          {/* Room Grid */}
           <div class="flex-1 overflow-y-auto p-4">
             {filteredRooms.length === 0 ? (
               <div class="flex flex-col items-center justify-center py-8">
@@ -54,34 +54,22 @@ export const JoinRoomModal = component$(({ isOpen, onClose, onJoin, publicRooms 
                 <p class="text-sm text-gray-500">No rooms found</p>
               </div>
             ) : (
-              <div class="space-y-2">
+              <div class="flex flex-wrap gap-3">
                 {filteredRooms.map((room) => (
-                  <div
+                  <button
                     key={room.id}
-                    class="p-3 border border-gray-200 rounded-lg hover:border-purple-300 hover:bg-purple-50 transition-colors"
+                    onClick$={() => onJoin(room.id)}
+                    class="flex items-center justify-between gap-2 px-3 py-2 text-xs font-medium bg-purple-600 hover:bg-purple-700 text-white transition-colors w-[calc(50%-0.375rem)] md:w-[calc(33.333%-0.5rem)] lg:w-[calc(25%-0.5625rem)] xl:w-[calc(16.666%-0.625rem)]"
+                    style="border-radius: 4px;"
                   >
-                    <div class="flex items-start justify-between mb-2">
-                      <div class="flex items-center gap-2 flex-1">
-                        <h4 class="font-medium text-sm text-gray-900">{room.name}</h4>
-                        {room.is_admin_room && (
-                          <LuLock class="w-3.5 h-3.5 text-orange-500" title="Admin Only" />
-                        )}
-                      </div>
-                      <button
-                        onClick$={() => onJoin(room.id)}
-                        class="px-3 py-1 text-xs font-medium bg-purple-600 text-white rounded hover:bg-purple-700 transition-colors"
-                      >
-                        Join
-                      </button>
+                    <span class="font-semibold truncate flex-1 text-left">
+                      {room.name}
+                    </span>
+                    <div class="flex items-center gap-1 text-xs opacity-90 flex-shrink-0">
+                      <LuUsers class="w-3 h-3" />
+                      <span>{room.member_count || 0}</span>
                     </div>
-                    {room.description && (
-                      <p class="text-xs text-gray-600 mb-2">{room.description}</p>
-                    )}
-                    <div class="flex items-center gap-1 text-xs text-gray-500">
-                      <LuUsers class="w-3.5 h-3.5" />
-                      <span>{room.member_count || 0} members</span>
-                    </div>
-                  </div>
+                  </button>
                 ))}
               </div>
             )}

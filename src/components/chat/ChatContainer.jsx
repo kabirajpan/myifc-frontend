@@ -55,6 +55,7 @@ export const ChatContainer = component$(
         pagination,
         messageContainerRef, // ✅ NEW: Receive ref from parent
         onScrollToBottom, // ✅ NEW: Receive scroll function
+        loading,
     }) => {
         const newMessage = useSignal("");
         const showEmojiPicker = useSignal(false);
@@ -118,6 +119,16 @@ export const ChatContainer = component$(
         });
 
         const renderMessages = () => {
+
+            // ✅ NEW: Show loader when loading
+            if (loading && messages.length === 0) {
+                return (
+                    <div class="flex flex-col items-center justify-center h-full">
+                        <div class="w-10 h-10 border-4 border-purple-200 border-t-purple-600 rounded-full animate-spin mb-3"></div>
+                        <p class="text-sm text-gray-600 font-medium">Loading...</p>
+                    </div>
+                );
+            }
             if (messages.length === 0) {
                 return (
                     <div class="flex flex-col items-center justify-center py-8">
@@ -198,7 +209,7 @@ export const ChatContainer = component$(
         }
 
         return (
-            <div class="flex-1 bg-white sm:border sm:border-gray-200 sm:rounded-lg flex flex-col overflow-hidden h-full">
+            <div class="flex-1 bg-white sm:border sm:border-gray-200 sm:rounded-lg flex flex-col min-h-0">
                 {/* Header */}
                 <div class="flex-shrink-0 px-3 py-2.5 border-b border-gray-200 flex items-center justify-between bg-white">
                     <div class="flex items-center gap-2">

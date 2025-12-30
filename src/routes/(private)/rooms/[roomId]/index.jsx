@@ -18,8 +18,8 @@ import { useAuth } from "../../../../context/auth";
 import { ChatSidebar } from "../../../../components/chat/ChatSidebar.jsx";
 import { ChatContainer } from "../../../../components/chat/ChatContainer.jsx";
 import { UserList } from "../../../../components/chat/UserList.jsx";
-import { ImageViewer } from "../../../../components/ui/ImageViewer";
-import { EmojiPicker } from "../../../../components/ui/EmojiPicker"; 
+import { MediaViewer } from "../../../../components/ui/MediaViewer";
+import { EmojiPicker } from "../../../../components/ui/EmojiPicker";
 import { CreateRoomModal } from "../../../../components/rooms/CreateRoomModal";
 import { JoinRoomModal } from "../../../../components/rooms/JoinRoomModal";
 import { UnifiedSidebar } from "../../../../components/chat/UnifiedSidebar.jsx";
@@ -339,6 +339,8 @@ export default component$(() => {
   // Add a ref for message container
   // const messageContainerRef = useSignal(null);
 
+
+
   // Add this function to scroll to bottom
   const scrollToBottom = $(() => {
     if (messageContainerRef.value) {
@@ -349,6 +351,11 @@ export default component$(() => {
   useVisibleTask$(async ({ track, cleanup }) => {
     const currentRoomId = track(() => location.params.roomId);
 
+    // ✅ ADD THIS LINE HERE (before anything else):
+    if (room.showRoomList && currentRoomId) {
+      room.showRoomList.value = false;
+    }
+
     if (!currentRoomId) {
       console.error('❌ No room ID provided');
       room.state.error = "No room ID provided";
@@ -357,7 +364,12 @@ export default component$(() => {
     }
 
     console.log('🎯 Room changed to:', currentRoomId);
+
+    // ✅ ALWAYS show loading when switching rooms
     room.state.loading = true;
+
+    const cached = getCachedRoom(room.state, currentRoomId);
+    const isStale = isCacheStale(room.state, currentRoomId);
 
     // Reset UI state
     room.state.error = null;
@@ -365,21 +377,16 @@ export default component$(() => {
     room.state.imageViewer.isOpen = false;
     room.state.imageViewer.isBuilt = false;
 
-    // Load unified sidebar data
-    try {
-      const [roomsResponse, chatsResponse] = await Promise.all([
-        roomsApi.getUserRooms(),
-        chatApi.getSessions(false),
-      ]);
-      unifiedSidebar.rooms.value = roomsResponse.rooms || [];
-      unifiedSidebar.chats.value = chatsResponse.chats || [];
-    } catch (err) {
-      console.error('Failed to load unified sidebar:', err);
-    }
+    // Load unified sidebar data (don't wait for it)
+    roomsApi.getUserRooms().then(response => {
+      unifiedSidebar.rooms.value = response.rooms || [];
+    }).catch(err => console.error('Failed to load rooms:', err));
 
-    // Load room data
-    const cached = getCachedRoom(room.state, currentRoomId);
-    const isStale = isCacheStale(room.state, currentRoomId);
+    chatApi.getSessions(false).then(response => {
+      unifiedSidebar.chats.value = response.chats || [];
+    }).catch(err => console.error('Failed to load chats:', err));
+
+    // Load room data (cache check already done above)
 
     if (cached && !isStale) {
       console.log('✅ Using cached data, checking for updates...');
@@ -439,6 +446,8 @@ export default component$(() => {
             // ✅ Use new function (handles 100-message shift automatically)
             addMessageToNew(room.state, currentRoomId, mappedMsg);
             console.log('✅ [ROOM WS] Message added to cache');
+
+            setTimeout(() => scrollToBottom(), 100);
 
             // ✅ Update image viewer if it's built and message is media
             if (room.state.imageViewer.isBuilt && (newMsg.type === 'image' || newMsg.type === 'gif')) {
@@ -654,11 +663,6 @@ export default component$(() => {
   const handleRoomSelect = $(async (selectedRoom) => {
     console.log('🎯 Room selected:', selectedRoom.id);
 
-    // Close mobile room list
-    if (room.showRoomList) {
-      room.showRoomList.value = false;
-    }
-
     await nav(`/rooms/${selectedRoom.id}`);
   });
 
@@ -694,6 +698,8 @@ export default component$(() => {
     // ✅ Add optimistically (user sees it immediately)
     addMessageToNew(room.state, roomId, tempMessage);
     console.log('✅ [SEND] Temp message added:', tempId);
+
+    setTimeout(() => scrollToBottom(), 100);
 
     const replyId = room.state.replyingTo?.id || null;
     room.state.replyingTo = null;
@@ -788,10 +794,11 @@ export default component$(() => {
   const handleImageClick = $((messageId, url) => {
     if (!room.state.imageViewer.isBuilt) {
       room.state.imageViewer.images = messages.value
-        .filter(m => m.type === 'image' || m.type === 'gif')
+        .filter(m => m.type === 'image' || m.type === 'gif' || m.type === 'audio')  // ✅ Include audio
         .map(m => ({
           id: m.id,
           url: m.content,
+          type: m.type,  // ✅ Add type field
           sender_username: m.sender_username,
           sender_gender: m.sender_gender,
           caption: m.caption,
@@ -810,22 +817,124 @@ export default component$(() => {
 
   const handleImageReact = $(async (messageId, emoji) => {
     try {
-      await roomsApi.reactToMessage(roomId, messageId, emoji);
-
+      // ✅ STEP 1: Check if user already reacted with this emoji
       const message = room.state.roomsCache[roomId]?.messages?.find(m => m.id === messageId);
+      const alreadyReacted = message?.reactions?.some(
+        r => r.emoji === emoji && r.user_id === auth.user.value?.id
+      );
+
+      if (alreadyReacted) {
+        console.log('⚠️ User already reacted, removing reaction instead');
+
+        // ✅ STEP 2: Find and remove the existing reaction
+        const existingReaction = message.reactions.find(
+          r => r.emoji === emoji && r.user_id === auth.user.value?.id
+        );
+
+        if (existingReaction) {
+          // Remove from message cache
+          await handleRemoveReaction(messageId, existingReaction.id);
+
+          // ✅ STEP 4: Remove from image viewer too
+          if (room.state.imageViewer.isBuilt) {
+            const imgIndex = room.state.imageViewer.images.findIndex(img => img.id === messageId);
+            if (imgIndex !== -1) {
+              room.state.imageViewer.images[imgIndex] = {
+                ...room.state.imageViewer.images[imgIndex],
+                reactions: room.state.imageViewer.images[imgIndex].reactions.filter(
+                  r => r.id !== existingReaction.id
+                )
+              };
+            }
+          }
+
+          room.state.successMessage = "Reaction removed!";
+          setTimeout(() => (room.state.successMessage = null), 2000);
+        }
+        return;
+      }
+
+      // ✅ STEP 3: Create temporary reaction for instant UI update
+      const tempReaction = {
+        id: `temp-${Date.now()}`,
+        emoji,
+        user_id: auth.user.value.id,
+        username: auth.user.value.username,
+        created_at: Date.now()
+      };
+
+      // Add temp reaction to message cache immediately
       if (message) {
         updateMessage(room.state, roomId, messageId, {
-          reactions: [...(message.reactions || []), {
-            id: Date.now(),
-            emoji,
-            user_id: auth.user.value.id
-          }]
+          reactions: [...(message.reactions || []), tempReaction]
         });
+      }
+
+      // ✅ STEP 4: Add temp reaction to image viewer immediately
+      if (room.state.imageViewer.isBuilt) {
+        const imgIndex = room.state.imageViewer.images.findIndex(img => img.id === messageId);
+        if (imgIndex !== -1) {
+          room.state.imageViewer.images[imgIndex] = {
+            ...room.state.imageViewer.images[imgIndex],
+            reactions: [...(room.state.imageViewer.images[imgIndex].reactions || []), tempReaction]
+          };
+        }
+      }
+
+      // Call API in background
+      const response = await roomsApi.reactToMessage(roomId, messageId, emoji);
+      const realReaction = response.data;
+
+      // Replace temp with real reaction in message cache
+      const msg = room.state.roomsCache[roomId]?.messages?.find(m => m.id === messageId);
+      if (msg) {
+        const reactions = msg.reactions.filter(r => r.id !== tempReaction.id);
+        updateMessage(room.state, roomId, messageId, {
+          reactions: [...reactions, realReaction]
+        });
+      }
+
+      // ✅ STEP 4: Replace temp with real reaction in image viewer
+      if (room.state.imageViewer.isBuilt) {
+        const imgIndex = room.state.imageViewer.images.findIndex(img => img.id === messageId);
+        if (imgIndex !== -1) {
+          const reactions = room.state.imageViewer.images[imgIndex].reactions.filter(
+            r => r.id !== tempReaction.id
+          );
+          room.state.imageViewer.images[imgIndex] = {
+            ...room.state.imageViewer.images[imgIndex],
+            reactions: [...reactions, realReaction]
+          };
+        }
       }
 
       room.state.successMessage = "Reaction added!";
       setTimeout(() => (room.state.successMessage = null), 2000);
+
     } catch (err) {
+      // Rollback on error - remove temp reaction from BOTH places
+      const msg = room.state.roomsCache[roomId]?.messages?.find(m => m.id === messageId);
+      if (msg) {
+        const reactions = msg.reactions.filter(r => !r.id.toString().startsWith('temp-'));
+        updateMessage(room.state, roomId, messageId, {
+          reactions
+        });
+      }
+
+      // ✅ STEP 4: Remove temp from image viewer on error
+      if (room.state.imageViewer.isBuilt) {
+        const imgIndex = room.state.imageViewer.images.findIndex(img => img.id === messageId);
+        if (imgIndex !== -1) {
+          const reactions = room.state.imageViewer.images[imgIndex].reactions.filter(
+            r => !r.id.toString().startsWith('temp-')
+          );
+          room.state.imageViewer.images[imgIndex] = {
+            ...room.state.imageViewer.images[imgIndex],
+            reactions
+          };
+        }
+      }
+
       room.state.error = err.message || "Failed to add reaction";
     }
   });
@@ -934,19 +1043,11 @@ export default component$(() => {
     }
   });
 
-  if (!roomId) {
-    return (
-      <div class="fixed inset-0 top-16 flex items-center justify-center bg-gray-50">
-        <div class="text-center">
-          <p class="text-sm text-red-600 mb-2">No room ID provided</p>
-          <p class="text-xs text-gray-500">Redirecting...</p>
-        </div>
-      </div>
-    );
-  }
+
 
   return (
-    <div class="fixed inset-0 top-16 flex flex-col sm:flex-row sm:gap-3 sm:p-3 bg-gray-50 sm:bg-transparent">
+    <div class="fixed inset-0 top-16 flex flex-col sm:flex-row sm:gap-3 sm:p-3 bg-gray-50 sm:bg-transparent h-[calc(100vh-4rem)]">
+
       {/* Unified Sidebar */}
       <UnifiedSidebar
         isOpen={unifiedSidebar.isOpen.value}
@@ -959,7 +1060,7 @@ export default component$(() => {
       />
 
       {/* Room List Sidebar */}
-      <div class={`${room.showRoomList?.value === false ? "hidden" : "flex"} sm:flex`}>
+      <div class={`${room.showRoomList?.value !== false ? "flex" : "hidden"} sm:flex`}>
         <ChatSidebar
           mode="room"
           items={room.state.rooms}
@@ -977,44 +1078,56 @@ export default component$(() => {
       </div>
 
       {/* Main Chat Container */}
-      <div class={`${room.showRoomList?.value === false ? "flex" : "hidden"} sm:flex flex-1`}>
-        <ChatContainer
-          mode="room"
-          currentChat={currentRoom.value}
-          messages={messages.value}
-          currentUserId={auth.user.value?.id}
-          onReactToMessage={handleReactToMessage}
-          onRemoveReaction={handleRemoveReaction}
-          onOpenReactionPicker={$((messageId) => activeReactionMessageId.value = messageId)}
-          onBack={$(() => room.showRoomList ? room.showRoomList.value = true : null)}
-          onShowUsers={$(async () => {
-            if (!room.showMembers.value) {
-              await loadMembers(roomId);
-            }
-            room.showMembers.value = !room.showMembers.value;
-          })}
-          onSendMessage={handleSendMessage}
-          onMessageClick={$((id) => (room.selectedMessageId.value = room.selectedMessageId.value === id ? null : id))}
-          onUsernameClick={handleUsernameClick}
-          onDeleteMessage={handleDeleteMessage}
-          onImageClick={handleImageClick}
-          selectedMessageId={room.selectedMessageId.value}
-          deletingMessageId={room.state.deletingMessageId}
-          replyingTo={room.state.replyingTo}
-          onCancelReply={$(() => (room.state.replyingTo = null))}
-          successMessage={room.state.successMessage}
-          error={room.state.error}
-          onClearError={$(() => (room.state.error = null))}
-          onClearSuccess={$(() => (room.state.successMessage = null))}
-          hasOlderMessages={pagination.value.hasOldMessages}
-          isLoadingOlder={pagination.value.isLoadingOld}  // ✅ CHANGED: isLoadingOlder → isLoadingOld
-          olderMessagesLoaded={pagination.value.oldMessagesLoaded}
-          onLoadOlderMessages={loadOlderMessages}
-          pagination={pagination.value}  // ✅ NEW: Pass full pagination object
-          onToggleUnifiedSidebar={$(() => { unifiedSidebar.isOpen.value = !unifiedSidebar.isOpen.value; })}
-          messageContainerRef={messageContainerRef}
-          onScrollToBottom={scrollToBottom}
-        />
+      <div class={`${room.showRoomList?.value !== false ? "hidden" : "flex"} sm:flex flex-1 flex-col h-full`}>
+        {room.state.loading && !currentRoom.value ? (
+          <div class="flex-1 bg-white sm:border sm:border-gray-200 sm:rounded-lg flex items-center justify-center">
+            <div class="text-center">
+              <div class="w-12 h-12 border-4 border-purple-200 border-t-purple-600 rounded-full animate-spin mb-3 mx-auto"></div>
+              <p class="text-sm text-gray-700 font-medium">Loading room...</p>
+              <p class="text-xs text-gray-500 mt-1">Please wait</p>
+            </div>
+          </div>
+        ) : (
+          <ChatContainer
+            mode="room"
+            currentChat={currentRoom.value}
+            messages={messages.value}
+            currentUserId={auth.user.value?.id}
+            loading={room.state.loading && !currentRoom.value}
+
+            onReactToMessage={handleReactToMessage}
+            onRemoveReaction={handleRemoveReaction}
+            onOpenReactionPicker={$((messageId) => activeReactionMessageId.value = messageId)}
+            onBack={$(() => room.showRoomList ? room.showRoomList.value = true : null)}
+            onShowUsers={$(async () => {
+              if (!room.showMembers.value) {
+                await loadMembers(roomId);
+              }
+              room.showMembers.value = !room.showMembers.value;
+            })}
+            onSendMessage={handleSendMessage}
+            onMessageClick={$((id) => (room.selectedMessageId.value = room.selectedMessageId.value === id ? null : id))}
+            onUsernameClick={handleUsernameClick}
+            onDeleteMessage={handleDeleteMessage}
+            onImageClick={handleImageClick}
+            selectedMessageId={room.selectedMessageId.value}
+            deletingMessageId={room.state.deletingMessageId}
+            replyingTo={room.state.replyingTo}
+            onCancelReply={$(() => (room.state.replyingTo = null))}
+            successMessage={room.state.successMessage}
+            error={room.state.error}
+            onClearError={$(() => (room.state.error = null))}
+            onClearSuccess={$(() => (room.state.successMessage = null))}
+            hasOlderMessages={pagination.value.hasOlderMessages}
+            isLoadingOlder={pagination.value.isLoadingOld}
+            olderMessagesLoaded={pagination.value.oldMessagesLoaded}
+            onLoadOlderMessages={loadOlderMessages}
+            pagination={pagination.value}
+            onToggleUnifiedSidebar={$(() => { unifiedSidebar.isOpen.value = !unifiedSidebar.isOpen.value; })}
+            messageContainerRef={messageContainerRef}
+            onScrollToBottom={scrollToBottom}
+          />
+        )}
       </div>
 
       {/* Members List */}
@@ -1043,12 +1156,16 @@ export default component$(() => {
         publicRooms={publicRooms.value}
       />
 
-      {/* Image Viewer */}
-      <ImageViewer
-        imageUrl={
+      <MediaViewer
+        mediaUrl={
           room.state.imageViewer.isOpen && room.state.imageViewer.images[room.state.imageViewer.currentIndex]
             ? room.state.imageViewer.images[room.state.imageViewer.currentIndex].url
             : null
+        }
+        mediaType={
+          room.state.imageViewer.isOpen && room.state.imageViewer.images[room.state.imageViewer.currentIndex]
+            ? room.state.imageViewer.images[room.state.imageViewer.currentIndex].type || "image"
+            : "image"
         }
         isOpen={room.state.imageViewer.isOpen}
         onClose={$(() => (room.state.imageViewer.isOpen = false))}

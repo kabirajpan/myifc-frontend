@@ -11,7 +11,7 @@ import { wsService } from "../../../api/websocket";
 import { ChatContainer } from "../../../components/chat/ChatContainer.jsx";
 import { ChatSidebar } from "../../../components/chat/ChatSidebar.jsx";
 import { UserList } from "../../../components/chat/UserList.jsx";
-import { ImageViewer } from "../../../components/ui/ImageViewer.jsx";
+import { MediaViewer } from "../../../components/ui/MediaViewer";
 
 import { UnifiedSidebar } from "../../../components/chat/UnifiedSidebar.jsx";
 import { useUnifiedSidebar } from "../../../utils/useUnifiedSidebar.js";
@@ -253,7 +253,7 @@ export default component$(() => {
           }
 
           updateChatListItem(data.data);
-          
+
           // Update unified sidebar
           if (data.data.session_id) {
             const chat = unifiedSidebar.chats.value.find(c => c.session_id === data.data.session_id);
@@ -267,13 +267,13 @@ export default component$(() => {
               unifiedSidebar.chats.value = unifiedSidebar.chats.value.map(c =>
                 c.session_id === data.data.session_id
                   ? {
-                      ...c,
-                      last_message: lastMessage,
-                      last_message_time: data.data.message.created_at,
-                      unread_count: data.data.message.sender_id === auth.user.value?.id
-                        ? c.unread_count
-                        : c.unread_count + 1,
-                    }
+                    ...c,
+                    last_message: lastMessage,
+                    last_message_time: data.data.message.created_at,
+                    unread_count: data.data.message.sender_id === auth.user.value?.id
+                      ? c.unread_count
+                      : c.unread_count + 1,
+                  }
                   : c
               );
             }
@@ -553,10 +553,10 @@ export default component$(() => {
                 if (otherUserId === auth.user.value?.id) return;
                 const rect = e.target.getBoundingClientRect();
                 userMenuPosition.value = { top: rect.bottom + 5, left: rect.left };
-                selectedUser.value = { 
-                  user_id: otherUserId, 
-                  username: otherUserName, 
-                  gender: chat.state.otherUserGender 
+                selectedUser.value = {
+                  user_id: otherUserId,
+                  username: otherUserName,
+                  gender: chat.state.otherUserGender
                 };
                 showUserMenu.value = true;
               }}
@@ -596,13 +596,14 @@ export default component$(() => {
         onBlockUser={handleBlockUser}
       />
 
-      {/* Image Viewer */}
-      <ImageViewer
-        imageUrl={
+      {/* Media Viewer */}
+      <MediaViewer
+        mediaUrl={
           chat.state.imageViewer.isOpen && chat.state.imageViewer.images[chat.state.imageViewer.currentIndex]
             ? chat.state.imageViewer.images[chat.state.imageViewer.currentIndex].url
             : null
         }
+        mediaType="image"
         isOpen={chat.state.imageViewer.isOpen}
         onClose={$(() => {
           chat.state.imageViewer.isOpen = false;

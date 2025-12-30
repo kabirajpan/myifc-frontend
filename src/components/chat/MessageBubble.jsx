@@ -94,46 +94,26 @@ export const MessageBubble = component$(
     });
 
     // Update menu position on scroll
+    // Close menu on scroll
     useVisibleTask$(({ track, cleanup }) => {
       track(() => showContextMenu.value);
 
       if (!showContextMenu.value) return;
 
       const handleScroll = () => {
-        requestAnimationFrame(() => {
-          updateMenuPosition();
-        });
+        showContextMenu.value = false; // ✅ Just close it on scroll
       };
 
-      // Find all scrollable containers
-      const scrollableContainers = [
-        // Messages container with overflow-y-auto
-        ...Array.from(document.querySelectorAll('.overflow-y-auto')),
-        // Flex container
-        ...Array.from(document.querySelectorAll('.flex-1.overflow-y-auto')),
-        // Any parent with scroll
-        document.body,
-        window
-      ];
+      const scrollContainer = document.querySelector('.overflow-y-auto');
 
-      // Add scroll listeners to all potential containers
-      scrollableContainers.forEach(container => {
-        if (container === window) {
-          window.addEventListener('scroll', handleScroll, { passive: true });
-        } else if (container instanceof Element) {
-          container.addEventListener('scroll', handleScroll, { passive: true });
-        }
-      });
+      if (scrollContainer) {
+        scrollContainer.addEventListener('scroll', handleScroll, { passive: true });
+      }
 
-      // Cleanup all listeners
       cleanup(() => {
-        scrollableContainers.forEach(container => {
-          if (container === window) {
-            window.removeEventListener('scroll', handleScroll);
-          } else if (container instanceof Element) {
-            container.removeEventListener('scroll', handleScroll);
-          }
-        });
+        if (scrollContainer) {
+          scrollContainer.removeEventListener('scroll', handleScroll);
+        }
       });
     });
 
@@ -277,10 +257,54 @@ export const MessageBubble = component$(
       if (msg.type === "audio") {
         return (
           <div class="mb-2">
-            {msg.caption && <p class="text-sm text-gray-700 mb-2">{msg.caption}</p>}
-            <div class="flex items-center gap-2 bg-gray-100 rounded-lg p-2 max-w-xs">
+            {/* Button bar above audio */}
+            <div class="flex items-center gap-2 mb-2">
               <button
-                onClick$={toggleAudio}
+                onClick$={() => onImageClick(msg.id, msg.content)}
+                class="px-2 py-1 bg-blue-500 text-white text-xs rounded hover:bg-blue-600 transition-colors flex items-center gap-1"
+                title="Open audio player"
+              >
+                <LuMic class="w-3 h-3" />
+                <span>Open</span>
+              </button>
+      
+              {!isOwn && (
+                <button
+                  class="px-2 py-1 bg-gray-500 text-white text-xs rounded hover:bg-gray-600 transition-colors flex items-center gap-1"
+                  title="Report"
+                >
+                  <LuAlertCircle class="w-3 h-3" />
+                  <span>Report</span>
+                </button>
+              )}
+      
+              {isOwn && (
+                <button
+                  onClick$={() => onDeleteMessage(msg.id)}
+                  disabled={deletingMessageId === msg.id}
+                  class="px-2 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition-colors disabled:opacity-50 flex items-center gap-1"
+                  title="Delete"
+                >
+                  {deletingMessageId === msg.id ? (
+                    <div class="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  ) : (
+                    <>
+                      <LuTrash2 class="w-3 h-3" />
+                      <span>Delete</span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+      
+            {/* Inline Audio Player */}
+            <div class="flex items-center gap-2 bg-gray-100 rounded-lg p-2 max-w-xs cursor-pointer hover:bg-gray-200 transition-colors"
+                 onClick$={() => onImageClick(msg.id, msg.content)}>
+              <button
+                onClick$={(e) => {
+                  e.stopPropagation();
+                  toggleAudio();
+                }}
                 class={`p-2 bg-${accentColor}-600 text-white rounded-full hover:bg-${accentColor}-700 transition-colors`}
               >
                 {isPlaying.value ? <LuPause class="w-4 h-4" /> : <LuPlay class="w-4 h-4" />}
@@ -301,8 +325,8 @@ export const MessageBubble = component$(
                 <LuDownload class="w-4 h-4" />
               </a>
             </div>
-
-            {/* Reactions below audio */}
+      
+            {/* Reactions and quick reaction buttons remain the same */}
             {msg.reactions && msg.reactions.length > 0 && (
               <div class="flex flex-wrap gap-1 mt-1 pointer-events-auto">
                 {Object.entries(
@@ -314,7 +338,7 @@ export const MessageBubble = component$(
                 ).map(([emoji, reactions]) => {
                   const userReaction = reactions.find(r => r.user_id === currentUserId);
                   const hasUserReacted = !!userReaction;
-
+      
                   return (
                     <button
                       key={emoji}
@@ -338,14 +362,13 @@ export const MessageBubble = component$(
                 })}
               </div>
             )}
-
-            {/* Quick reaction buttons for audio - Show for all users */}
+      
             <div class="flex gap-1 mt-1 pointer-events-auto">
               {['❤️', '👍', '😂', '😮', '😢'].map(emoji => {
                 const existingReaction = (msg.reactions || []).find(
                   r => r.emoji === emoji && r.user_id === currentUserId
                 );
-
+      
                 return (
                   <button
                     key={emoji}
@@ -464,8 +487,8 @@ export const MessageBubble = component$(
                     ref={avatarRef}
                     onClick$={handleAvatarClick}
                     class={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[12px] font-semibold border-2 bg-white ${ownBorderColor} cursor-pointer transition-all mt-0.5 ${showContextMenu.value
-                        ? `ring-2 ring-offset-1 ring-${accentColor}-500 shadow-lg`
-                        : `hover:ring-2 hover:ring-offset-1 hover:ring-${accentColor}-300`
+                      ? `ring-2 ring-offset-1 ring-${accentColor}-500 shadow-lg`
+                      : `hover:ring-2 hover:ring-offset-1 hover:ring-${accentColor}-300`
                       }`}
                   >
                     {msg.sender_username?.charAt(0).toUpperCase()}
@@ -521,8 +544,8 @@ export const MessageBubble = component$(
                     ref={avatarRef}
                     onClick$={handleAvatarClick}
                     class={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[12px] font-semibold border-2 bg-white mt-0.5 cursor-pointer transition-all ${showContextMenu.value
-                        ? 'ring-2 ring-offset-1'
-                        : 'hover:ring-2 hover:ring-offset-1'
+                      ? 'ring-2 ring-offset-1'
+                      : 'hover:ring-2 hover:ring-offset-1'
                       }`}
                     style={`color: ${getGenderBorderColor(msg.sender_gender)}; border-color: ${getGenderBorderColor(msg.sender_gender)}; ${showContextMenu.value ? `box-shadow: 0 0 0 2px white, 0 0 0 4px ${getGenderBorderColor(msg.sender_gender)};` : ''}`}
                   >
